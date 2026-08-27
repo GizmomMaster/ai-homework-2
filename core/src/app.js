@@ -34,6 +34,7 @@ export function createApp({ config, llmRunner, fetchImpl }) {
   const callbackDelivery = new CallbackDelivery({
     callbackUrls: config.callbackUrls,
     timeoutMs: config.jobs.deliveryTimeoutMs,
+    authToken: config.authToken,
     fetchImpl,
   });
 
@@ -51,7 +52,11 @@ export function createApp({ config, llmRunner, fetchImpl }) {
   const router = createRoutes(
     createHandlers({ chatRepository, jobRepository, dialogService, jobRunner }),
   );
-  const server = createServer({ router, maxBodyBytes: config.maxBodyBytes });
+  const server = createServer({
+    router,
+    maxBodyBytes: config.maxBodyBytes,
+    authToken: config.authToken,
+  });
 
   return {
     db,

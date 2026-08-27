@@ -2,9 +2,5 @@ node_modules
 npm-debug.log
 .env
 .git
-.gitignore
-README.md
-SPEC.md
-promt.md
 data
 test

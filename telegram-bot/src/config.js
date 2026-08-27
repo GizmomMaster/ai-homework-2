@@ -38,6 +38,9 @@ export const config = {
   /** Куда адаптер отправляет сообщения пользователей. */
   core: {
     baseUrl: process.env.CORE_BASE_URL || "http://localhost:8080",
+    // Общий с Core секрет: подписывает исходящие запросы и проверяется
+    // на входящих callback'ах. Не задан — проверка выключена.
+    authToken: process.env.CORE_AUTH_TOKEN || undefined,
     timeoutMs: positiveInt("CORE_TIMEOUT_MS", 10000),
     // Core отвечает сразу, не дожидаясь модели, поэтому долгих ожиданий тут
     // нет — повторы нужны только на случай, что Core ещё поднимается.
@@ -47,6 +50,7 @@ export const config = {
 
   /** Локальный сервер, на который Core доставляет готовые ответы. */
   callback: {
+    authToken: process.env.CORE_AUTH_TOKEN || undefined,
     port: positiveInt("CALLBACK_PORT", 8081),
     host: process.env.CALLBACK_HOST || "0.0.0.0",
     path: process.env.CALLBACK_PATH || "/callbacks/replies",

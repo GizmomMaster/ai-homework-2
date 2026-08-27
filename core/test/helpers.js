@@ -104,9 +104,9 @@ export async function startCoreApp({ llmRunner, transport, config: overrides } =
 }
 
 /** Поднимает только HTTP-слой с заглушками — для проверок контракта. */
-export async function startCore({ handlers, maxBodyBytes } = {}) {
+export async function startCore({ handlers, maxBodyBytes, authToken } = {}) {
   const router = createRoutes(handlers ?? createStubHandlers());
-  const server = createServer({ router, maxBodyBytes });
+  const server = createServer({ router, maxBodyBytes, authToken });
 
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
@@ -122,11 +122,15 @@ export async function startCore({ handlers, maxBodyBytes } = {}) {
 function requestApi(baseUrl) {
   return {
     baseUrl,
-    async request(method, path, { body, rawBody } = {}) {
+    async request(method, path, { body, rawBody, token } = {}) {
       const hasBody = rawBody !== undefined || body !== undefined;
+      const headers = {
+        ...(hasBody ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { "X-Core-Token": token } : {}),
+      };
       const response = await fetch(`${baseUrl}${path}`, {
         method,
-        headers: hasBody ? { "Content-Type": "application/json" } : undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
         body:
           rawBody !== undefined ? rawBody : body !== undefined ? JSON.stringify(body) : undefined,
       });

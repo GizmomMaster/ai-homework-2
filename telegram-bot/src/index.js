@@ -16,6 +16,7 @@ const coreClient = new CoreClient(config.core);
 // первый же ответ мог бы прийти в закрытый порт.
 const callbackServer = createCallbackServer({
   path: config.callback.path,
+  authToken: config.callback.authToken,
   onReply: (payload) => handleReply({ payload, telegramClient }),
 });
 

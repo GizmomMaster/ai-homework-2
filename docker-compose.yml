@@ -1,0 +1,42 @@
+# Два сервиса в общей внутренней сети. Наружу не публикуется ни один порт:
+# адаптер сам ходит в Telegram (long polling — исходящее соединение), а Core
+# доступен только адаптеру по имени сервиса.
+
+services:
+  core:
+    build: ./core
+    env_file:
+      - ./core/.env
+    environment:
+      # Внутри сети compose адаптер известен по имени сервиса.
+      ADAPTER_TELEGRAM_CALLBACK_URL: http://telegram-bot:8081/callbacks/replies
+      CORE_HOST: 0.0.0.0
+    volumes:
+      # История диалогов и очередь заданий переживают пересоздание контейнера.
+      - ./core/data:/app/data
+    # Позволяет контейнеру достучаться до Ollama, запущенной на хосте, по имени
+    # host.docker.internal (нужно для Linux; на Docker Desktop работает само).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  telegram-bot:
+    build: ./telegram-bot
+    env_file:
+      - ./telegram-bot/.env
+    environment:
+      CORE_BASE_URL: http://core:8080
+      CALLBACK_HOST: 0.0.0.0
+      CALLBACK_PORT: "8081"
+    depends_on:
+      core:
+        # Ждём, пока Core начнёт отвечать на /health: иначе первые сообщения
+        # упрутся в недоступный сервис.
+        condition: service_healthy
+    restart: unless-stopped

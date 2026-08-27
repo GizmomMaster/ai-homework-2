@@ -14,15 +14,23 @@ const SEEN_JOBS_LIMIT = 1000;
  * @param {{
  *   path: string,
  *   onReply: (payload: object) => Promise<void>,
- * }} params
+ *   authToken?: string,
+ * }} params `authToken` — общий с Core секрет; если не задан, проверка выключена.
  */
-export function createCallbackServer({ path, onReply }) {
+export function createCallbackServer({ path, onReply, authToken }) {
   /** @type {Set<string>} обработанные задания — защита от повторной доставки */
   const seenJobs = new Set();
 
   return http.createServer((req, res) => {
     if (req.method !== "POST" || new URL(req.url, "http://adapter.local").pathname !== path) {
       sendJson(res, 404, { error: "not_found" });
+      return;
+    }
+
+    // «Ответ модели» может прислать кто угодно, кто дотянулся до порта, —
+    // без секрета бот отправил бы это пользователю от своего имени.
+    if (authToken && req.headers["x-core-token"] !== authToken) {
+      sendJson(res, 401, { error: "unauthorized" });
       return;
     }
 

@@ -45,6 +45,11 @@ export const config = {
   port: positiveInt("CORE_PORT", 8080),
   host: process.env.CORE_HOST || "0.0.0.0",
   maxBodyBytes: positiveInt("CORE_MAX_BODY_BYTES", 64 * 1024),
+  /**
+   * Общий секрет между Core и адаптерами. Если не задан, проверка выключена —
+   * допустимо при локальной разработке, но не при запуске в compose.
+   */
+  authToken: process.env.CORE_AUTH_TOKEN || undefined,
 
   sqlitePath: resolveFromProjectRoot(process.env.SQLITE_DB_PATH || "./data/core.db"),
   contextWindowTokens: positiveInt("CONTEXT_WINDOW_TOKENS", 50000),

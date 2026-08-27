@@ -19,6 +19,7 @@ export class HttpError extends Error {
 
 export const badRequest = (message) => new HttpError(400, "invalid_request", message);
 export const notFound = (message) => new HttpError(404, "not_found", message);
+export const unauthorized = (message) => new HttpError(401, "unauthorized", message);
 
 /**
  * Проверяет, что значение — непустая строка. Используется и для параметров

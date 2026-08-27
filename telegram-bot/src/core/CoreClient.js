@@ -31,8 +31,16 @@ export class CoreClient {
    *   fetchImpl?: typeof fetch,
    * }} options
    */
-  constructor({ baseUrl, timeoutMs = 10000, retries = 3, retryDelayMs = 1000, fetchImpl = fetch }) {
+  constructor({
+    baseUrl,
+    timeoutMs = 10000,
+    retries = 3,
+    retryDelayMs = 1000,
+    authToken,
+    fetchImpl = fetch,
+  }) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.authToken = authToken;
     this.timeoutMs = timeoutMs;
     this.retries = retries;
     this.retryDelayMs = retryDelayMs;
@@ -91,7 +99,10 @@ export class CoreClient {
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.authToken ? { "X-Core-Token": this.authToken } : {}),
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(this.timeoutMs),
       });

@@ -15,9 +15,10 @@ export class CallbackDelivery {
    *   fetchImpl?: typeof fetch,
    * }} params `callbackUrls` — адрес callback-эндпоинта по имени адаптера.
    */
-  constructor({ callbackUrls, timeoutMs = 10000, fetchImpl = fetch }) {
+  constructor({ callbackUrls, timeoutMs = 10000, authToken, fetchImpl = fetch }) {
     this.callbackUrls = callbackUrls;
     this.timeoutMs = timeoutMs;
+    this.authToken = authToken;
     this.fetchImpl = fetchImpl;
   }
 
@@ -49,7 +50,12 @@ export class CallbackDelivery {
     try {
       const response = await this.fetchImpl(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          // Тот же секрет в обратную сторону: адаптер не должен принимать
+          // «ответы модели» от кого попало.
+          ...(this.authToken ? { "X-Core-Token": this.authToken } : {}),
+        },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(this.timeoutMs),
       });

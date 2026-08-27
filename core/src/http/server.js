@@ -1,8 +1,11 @@
 import http from "node:http";
-import { HttpError } from "./errors.js";
+import { HttpError, unauthorized } from "./errors.js";
 import { logError } from "../logger.js";
 
 const METHODS_WITH_BODY = new Set(["POST", "PUT", "PATCH"]);
+
+/** Заголовок с общим секретом между Core и адаптерами. */
+export const AUTH_HEADER = "x-core-token";
 
 /**
  * HTTP-сервер оркестратора на встроенном `node:http` — без внешних
@@ -12,12 +15,21 @@ const METHODS_WITH_BODY = new Set(["POST", "PUT", "PATCH"]);
  * @param {{
  *   router: ReturnType<typeof import("./router.js").createRouter>,
  *   maxBodyBytes?: number,
- * }} params
+ *   authToken?: string,
+ * }} params `authToken` — общий секрет; если не задан, проверка выключена
+ *   (удобно для локальной разработки, но в compose его стоит задать).
  */
-export function createServer({ router, maxBodyBytes = 64 * 1024 }) {
+export function createServer({ router, maxBodyBytes = 64 * 1024, authToken }) {
   return http.createServer(async (req, res) => {
     try {
       const { pathname } = new URL(req.url, "http://core.local");
+
+      // /health намеренно открыт: он нужен healthcheck'у контейнера,
+      // а секретов не раскрывает.
+      if (authToken && pathname.startsWith("/v1/") && req.headers[AUTH_HEADER] !== authToken) {
+        throw unauthorized("Неверный или отсутствующий заголовок X-Core-Token.");
+      }
+
       const route = router.match(req.method, pathname);
 
       if (!route.found) {

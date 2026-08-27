@@ -14,10 +14,11 @@ const completedPayload = {
 };
 
 /** Поднимает callback-сервер и даёт функцию отправки в него запроса. */
-async function startServer(onReply = async () => {}) {
+async function startServer(onReply = async () => {}, { authToken } = {}) {
   const received = [];
   const server = createCallbackServer({
     path: CALLBACK_PATH,
+    authToken,
     onReply: async (payload) => {
       received.push(payload);
       await onReply(payload);
@@ -29,10 +30,13 @@ async function startServer(onReply = async () => {}) {
 
   return {
     received,
-    async post(payload, { path = CALLBACK_PATH, rawBody, method = "POST" } = {}) {
+    async post(payload, { path = CALLBACK_PATH, rawBody, method = "POST", token } = {}) {
       const response = await fetch(`${baseUrl}${path}`, {
         method,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "X-Core-Token": token } : {}),
+        },
         body: rawBody !== undefined ? rawBody : JSON.stringify(payload),
       });
       return { status: response.status, json: await response.json().catch(() => undefined) };
@@ -139,6 +143,43 @@ describe("callbackServer", () => {
       const response = await server.post(undefined, { rawBody: "{не json" });
 
       assert.equal(response.status, 400);
+    });
+  });
+
+  describe("защита секретом", () => {
+    it("принимает запрос с верным токеном", async () => {
+      server = await startServer(undefined, { authToken: "s3cret" });
+
+      const response = await server.post(completedPayload, { token: "s3cret" });
+
+      assert.equal(response.status, 200);
+      assert.equal(server.received.length, 1);
+    });
+
+    it("отклоняет запрос без токена", async () => {
+      server = await startServer(undefined, { authToken: "s3cret" });
+
+      const response = await server.post(completedPayload);
+
+      assert.equal(response.status, 401);
+      assert.equal(server.received.length, 0, "чужое сообщение не уйдёт пользователю");
+    });
+
+    it("отклоняет запрос с неверным токеном", async () => {
+      server = await startServer(undefined, { authToken: "s3cret" });
+
+      const response = await server.post(completedPayload, { token: "wrong-token" });
+
+      assert.equal(response.status, 401);
+      assert.equal(server.received.length, 0);
+    });
+
+    it("без настроенного секрета проверка не мешает", async () => {
+      server = await startServer();
+
+      const response = await server.post(completedPayload);
+
+      assert.equal(response.status, 200);
     });
   });
 

@@ -202,6 +202,55 @@ describe("HTTP-контракт Core", () => {
     });
   });
 
+  describe("защита секретом", () => {
+    it("пропускает запрос с верным токеном", async () => {
+      core = await startCore({ authToken: "s3cret" });
+
+      const response = await core.request("POST", messagesPath, {
+        body: validMessage,
+        token: "s3cret",
+      });
+
+      assert.equal(response.status, 202);
+    });
+
+    it("отклоняет запрос без токена", async () => {
+      core = await startCore({ authToken: "s3cret" });
+
+      const response = await core.request("POST", messagesPath, { body: validMessage });
+
+      assert.equal(response.status, 401);
+      assert.equal(response.json.error.code, "unauthorized");
+    });
+
+    it("отклоняет запрос с неверным токеном", async () => {
+      core = await startCore({ authToken: "s3cret" });
+
+      const response = await core.request("POST", messagesPath, {
+        body: validMessage,
+        token: "wrong-token",
+      });
+
+      assert.equal(response.status, 401);
+    });
+
+    it("оставляет /health открытым для healthcheck контейнера", async () => {
+      core = await startCore({ authToken: "s3cret" });
+
+      const response = await core.request("GET", "/health");
+
+      assert.equal(response.status, 200);
+    });
+
+    it("без настроенного секрета проверка не мешает", async () => {
+      core = await startCore();
+
+      const response = await core.request("POST", messagesPath, { body: validMessage });
+
+      assert.equal(response.status, 202);
+    });
+  });
+
   describe("внутренние ошибки", () => {
     it("отдаёт 500 без подробностей наружу", async (t) => {
       muteConsole(t);
