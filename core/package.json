@@ -1,0 +1,15 @@
+{
+  "name": "core-orchestrator",
+  "version": "1.0.0",
+  "description": "Оркестратор диалогов с LLM: сессии, контекст, учёт токенов, очередь заданий",
+  "type": "module",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
