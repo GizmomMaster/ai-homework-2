@@ -15,7 +15,7 @@ import { OllamaRunner } from "./OllamaRunner.js";
 export function createLlmRunner(config) {
   switch (config.llmProvider) {
     case "ollama":
-      return new OllamaRunner(config.ollama);
+      return new OllamaRunner({ ...config.ollama, numCtx: config.contextWindowTokens });
     default:
       throw new Error(`Неизвестный LLM_PROVIDER: "${config.llmProvider}"`);
   }

@@ -11,11 +11,12 @@
  */
 export class OllamaRunner {
   /**
-   * @param {{ baseUrl: string, model: string }} options
+   * @param {{ baseUrl: string, model: string, numCtx?: number }} options
    */
-  constructor({ baseUrl, model }) {
+  constructor({ baseUrl, model, numCtx }) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.model = model;
+    this.numCtx = numCtx;
   }
 
   /**
@@ -32,6 +33,13 @@ export class OllamaRunner {
           model: this.model,
           messages,
           stream: false,
+          // Без явного num_ctx Ollama использует контекст модели по умолчанию
+          // (часто заметно меньше нашего CONTEXT_WINDOW_TOKENS) и молча
+          // обрезает старые сообщения истории, чтобы уместиться в него —
+          // из-за этого счётчик токенов не растёт до настроенного лимита,
+          // а колеблется/уменьшается. Задаём num_ctx = наш лимит, чтобы
+          // модель реально держала в памяти окно нужного размера.
+          ...(this.numCtx ? { options: { num_ctx: this.numCtx } } : {}),
         }),
       });
     } catch (error) {
