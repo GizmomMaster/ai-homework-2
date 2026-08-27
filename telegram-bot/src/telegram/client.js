@@ -1,6 +1,7 @@
 import { logError } from "../logger.js";
 
 const TELEGRAM_MESSAGE_LIMIT = 4096;
+const LONG_POLL_TIMEOUT_SEC = 30;
 
 /**
  * Тонкий клиент Telegram Bot API на чистых HTTP-запросах (fetch),
@@ -14,11 +15,12 @@ export class TelegramClient {
     this.apiBase = `https://api.telegram.org/bot${token}`;
   }
 
-  async #call(method, payload) {
+  async #call(method, payload, { signal } = {}) {
     const response = await fetch(`${this.apiBase}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal,
     });
 
     const data = await response.json();
@@ -32,10 +34,12 @@ export class TelegramClient {
 
   /**
    * Long polling: ждёт до `timeout` секунд новые обновления начиная с `offset`.
-   * @param {{ offset?: number, timeout?: number }} params
+   * `signal` позволяет оборвать ожидание при остановке бота.
+   *
+   * @param {{ offset?: number, timeout?: number, signal?: AbortSignal }} params
    */
-  async getUpdates({ offset, timeout = 30 } = {}) {
-    return this.#call("getUpdates", { offset, timeout });
+  async getUpdates({ offset, timeout = LONG_POLL_TIMEOUT_SEC, signal } = {}) {
+    return this.#call("getUpdates", { offset, timeout }, { signal });
   }
 
   /**
@@ -82,12 +86,26 @@ export class TelegramClient {
   }
 }
 
-function splitIntoChunks(text, limit) {
+/**
+ * Режет текст на части не длиннее `limit`, по возможности по границам строк —
+ * так меньше шансов разорвать HTML-тег или слово посередине.
+ */
+export function splitIntoChunks(text, limit) {
   if (text.length <= limit) return [text];
 
   const chunks = [];
-  for (let i = 0; i < text.length; i += limit) {
-    chunks.push(text.slice(i, i + limit));
+  let rest = text;
+
+  while (rest.length > limit) {
+    const window = rest.slice(0, limit);
+    // Ищем последний перенос строки в пределах лимита; если строка одна
+    // длинная (например, база64 или минифицированный код) — режем жёстко.
+    const breakAt = window.lastIndexOf("\n");
+    const cut = breakAt > 0 ? breakAt + 1 : limit;
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
   }
+
+  if (rest.length > 0) chunks.push(rest);
   return chunks;
 }

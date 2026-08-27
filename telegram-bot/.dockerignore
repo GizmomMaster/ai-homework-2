@@ -2,6 +2,7 @@ node_modules
 npm-debug.log
 .env
 data
+test
 .git
 .gitignore
 README.md

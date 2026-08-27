@@ -1,11 +1,12 @@
 import { log, logError } from "../logger.js";
 import { markdownToTelegramHtml } from "../telegram/markdown.js";
+import { sendSafely } from "../telegram/send.js";
 
 /**
  * Обрабатывает одно входящее текстовое сообщение в рамках текущей сессии
- * диалога чата: сохраняет сообщение пользователя в SQLite, передаёт модели
- * всю историю сообщений сессии, сохраняет ответ и отслеживает размер
- * контекстного окна (в токенах, по данным Ollama).
+ * диалога чата: передаёт модели историю сессии вместе с новым вопросом,
+ * сохраняет обмен репликами в SQLite и отслеживает размер контекстного окна
+ * (в токенах, по данным Ollama).
  *
  * @param {{
  *   chatId: number|string,
@@ -32,7 +33,7 @@ export async function handleMessage({
       `[chat ${chatId}] Лимит контекстного окна уже достигнут ` +
         `(${session.totalTokens}/${contextWindowTokens} токенов) — запрос отклонён.`,
     );
-    await sendWarning(
+    await sendSafely(
       telegramClient,
       chatId,
       `Контекстное окно текущего диалога заполнено (${contextWindowTokens} токенов). ` +
@@ -42,46 +43,40 @@ export async function handleMessage({
   }
 
   log(`[chat ${chatId}] Новый запрос получен (${text.length} симв.), обращаюсь к LLM...`);
-  chatRepository.addMessage(session.id, "user", text);
 
+  let result;
   try {
-    const messages = chatRepository.getMessages(session.id);
-    const { content, promptTokens, completionTokens } = await llmRunner.chat(messages);
-    const totalTokens = promptTokens + completionTokens;
-
-    chatRepository.addMessage(session.id, "assistant", content);
-    chatRepository.setSessionTokens(session.id, totalTokens);
-
-    await telegramClient.sendMessage({
-      chatId,
-      text: markdownToTelegramHtml(content),
-      parseMode: "HTML",
-    });
-    log(
-      `[chat ${chatId}] Запрос успешно обработан за ${Date.now() - startedAt} мс ` +
-        `(контекст: ${totalTokens}/${contextWindowTokens} токенов).`,
-    );
-
-    if (totalTokens >= contextWindowTokens) {
-      await sendWarning(
-        telegramClient,
-        chatId,
-        `Контекстное окно диалога заполнено (${totalTokens}/${contextWindowTokens} токенов). ` +
-          `Для продолжения общения начните новый диалог командой /new.`,
-      );
-    }
+    // Новое сообщение пока НЕ пишем в БД: если запрос к модели упадёт,
+    // вопрос без ответа останется в истории и уедет в следующий запрос.
+    const messages = [...chatRepository.getMessages(session.id), { role: "user", content: text }];
+    result = await llmRunner.chat(messages);
   } catch (error) {
-    logError(`[chat ${chatId}] Ошибка обработки запроса за ${Date.now() - startedAt} мс:`, error);
-    await sendWarning(
+    logError(`[chat ${chatId}] Ошибка обращения к LLM за ${Date.now() - startedAt} мс:`, error);
+    await sendSafely(
       telegramClient,
       chatId,
       "Произошла ошибка при обращении к модели. Попробуйте ещё раз позже.",
     );
+    return;
   }
-}
 
-async function sendWarning(telegramClient, chatId, text) {
-  await telegramClient.sendMessage({ chatId, text }).catch((error) => {
-    logError(`[chat ${chatId}] Не удалось отправить сообщение пользователю:`, error);
+  const totalTokens = result.promptTokens + result.completionTokens;
+  chatRepository.appendExchange(session.id, text, result.content, totalTokens);
+
+  await sendSafely(telegramClient, chatId, markdownToTelegramHtml(result.content), {
+    parseMode: "HTML",
   });
+  log(
+    `[chat ${chatId}] Запрос успешно обработан за ${Date.now() - startedAt} мс ` +
+      `(контекст: ${totalTokens}/${contextWindowTokens} токенов).`,
+  );
+
+  if (totalTokens >= contextWindowTokens) {
+    await sendSafely(
+      telegramClient,
+      chatId,
+      `Контекстное окно диалога заполнено (${totalTokens}/${contextWindowTokens} токенов). ` +
+        `Для продолжения общения начните новый диалог командой /new.`,
+    );
+  }
 }

@@ -11,12 +11,13 @@
  */
 export class OllamaRunner {
   /**
-   * @param {{ baseUrl: string, model: string, numCtx?: number }} options
+   * @param {{ baseUrl: string, model: string, numCtx?: number, timeoutMs?: number }} options
    */
-  constructor({ baseUrl, model, numCtx }) {
+  constructor({ baseUrl, model, numCtx, timeoutMs }) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.model = model;
     this.numCtx = numCtx;
+    this.timeoutMs = timeoutMs;
   }
 
   /**
@@ -41,8 +42,17 @@ export class OllamaRunner {
           // модель реально держала в памяти окно нужного размера.
           ...(this.numCtx ? { options: { num_ctx: this.numCtx } } : {}),
         }),
+        // Без таймаута зависший запрос к модели блокирует бота бессрочно:
+        // цикл polling обрабатывает сообщения последовательно.
+        signal: this.timeoutMs ? AbortSignal.timeout(this.timeoutMs) : undefined,
       });
     } catch (error) {
+      if (error.name === "TimeoutError" || error.name === "AbortError") {
+        throw new Error(
+          `Ollama не ответила за ${this.timeoutMs} мс. Возможно, модель слишком тяжёлая ` +
+            `для этой машины или значение OLLAMA_TIMEOUT_MS слишком мало.`,
+        );
+      }
       throw new Error(
         `Не удалось подключиться к Ollama по адресу ${this.baseUrl}. ` +
           `Убедитесь, что Ollama запущена. Причина: ${error.message}`,

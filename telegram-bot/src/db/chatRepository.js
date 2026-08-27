@@ -31,6 +31,17 @@ export class ChatRepository {
         `UPDATE chat_sessions SET total_tokens = ? WHERE id = ?`,
       ),
     };
+
+    // Обмен репликами пишется одной транзакцией: либо в истории появляются
+    // и вопрос, и ответ, либо не появляется ничего. Иначе неудачный запрос
+    // к LLM оставил бы в контексте вопрос без ответа, и он бы уехал в
+    // следующий запрос как лишний "user"-месседж.
+    this.appendExchangeTx = db.transaction((sessionId, userText, assistantText, totalTokens) => {
+      const now = Date.now();
+      this.stmts.insertMessage.run(sessionId, "user", userText, now);
+      this.stmts.insertMessage.run(sessionId, "assistant", assistantText, now);
+      this.stmts.updateSessionTokens.run(totalTokens, sessionId);
+    });
   }
 
   /**
@@ -63,6 +74,20 @@ export class ChatRepository {
    */
   addMessage(sessionId, role, content) {
     this.stmts.insertMessage.run(sessionId, role, content, Date.now());
+  }
+
+  /**
+   * Атомарно добавляет в историю пару "вопрос пользователя + ответ модели"
+   * и обновляет счётчик токенов сессии. Вызывается только после успешного
+   * ответа LLM, поэтому в истории не остаётся вопросов без ответов.
+   *
+   * @param {number} sessionId
+   * @param {string} userText
+   * @param {string} assistantText
+   * @param {number} totalTokens
+   */
+  appendExchange(sessionId, userText, assistantText, totalTokens) {
+    this.appendExchangeTx(sessionId, userText, assistantText, totalTokens);
   }
 
   /**

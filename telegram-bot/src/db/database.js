@@ -17,6 +17,9 @@ export function createDatabase(dbPath) {
 
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
+  // По умолчанию SQLite не проверяет внешние ключи — включаем, чтобы
+  // сообщение не могло сослаться на несуществующую сессию.
+  db.pragma("foreign_keys = ON");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_sessions (
