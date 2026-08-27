@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Позволяет контейнеру достучаться до Ollama, запущенной на хосте,
+    # по имени host.docker.internal (актуально для Linux; на Docker Desktop
+    # для Mac/Windows это имя доступно из коробки).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

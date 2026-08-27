@@ -85,6 +85,132 @@ npm start
   скопирован без лишних пробелов и что у процесса `npm start` есть доступ
   в интернет (для запросов к Telegram API).
 
+## Запуск в Docker
+
+Бот можно запустить в контейнере, при этом он продолжит получать сообщения
+из Telegram (через long polling — исходящее соединение, входящий порт не
+нужен) и обращаться к LLM, запущенной локально на хост-машине (Ollama,
+LM Studio и т.п.).
+
+### 1. Настройте `.env`
+
+Как и при обычном запуске, скопируйте `.env.example` в `.env` и заполните
+`TELEGRAM_BOT_TOKEN`. Ключевой момент — `OLLAMA_BASE_URL` должен указывать
+не на `localhost` (это будет localhost *внутри контейнера*, а не хоста), а на
+`host.docker.internal`:
+
+```
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+```
+
+### 2. Разрешите Ollama слушать не только localhost
+
+По умолчанию Ollama на хосте слушает `127.0.0.1:11434` и недоступна извне
+контейнера. Запустите Ollama с `OLLAMA_HOST=0.0.0.0`:
+
+```bash
+OLLAMA_HOST=0.0.0.0 ollama serve
+```
+
+(если Ollama установлена как systemd-сервис — добавьте
+`Environment="OLLAMA_HOST=0.0.0.0"` в юнит и перезапустите его).
+
+### 3. Соберите и запустите контейнер
+
+```bash
+docker compose up --build -d
+```
+
+Файл `docker-compose.yml` уже содержит `extra_hosts: host.docker.internal:host-gateway`,
+необходимый для того, чтобы имя `host.docker.internal` резолвилось в адрес
+хоста на Linux (на Docker Desktop для Mac/Windows оно работает по умолчанию).
+
+Логи бота:
+
+```bash
+docker compose logs -f
+```
+
+Остановить:
+
+```bash
+docker compose down
+```
+
+Без `docker compose` то же самое можно сделать через `docker build`/`docker run`:
+
+```bash
+docker build -t telegram-local-llm-bot .
+docker run -d --name telegram-bot \
+  --env-file .env \
+  --add-host=host.docker.internal:host-gateway \
+  --restart unless-stopped \
+  telegram-local-llm-bot
+```
+
+### Нюансы запуска на Windows (Docker Desktop)
+
+Общая схема та же, но есть несколько мест, где Windows отличается от Linux/macOS:
+
+- **`host.docker.internal` работает из коробки.** На Docker Desktop для Windows
+  это имя резолвится в адрес хоста автоматически, поэтому строка `extra_hosts`
+  в `docker-compose.yml` не мешает, но фактически не обязательна — можно не
+  трогать.
+
+- **Переменную `OLLAMA_HOST` нужно задавать по-другому.** Синтаксис
+  `OLLAMA_HOST=0.0.0.0 ollama serve` — это bash, в Windows он не сработает.
+  Если запускаете Ollama вручную из терминала:
+
+  ```powershell
+  # PowerShell
+  $env:OLLAMA_HOST = "0.0.0.0"
+  ollama serve
+  ```
+
+  ```cmd
+  :: cmd.exe
+  set OLLAMA_HOST=0.0.0.0
+  ollama serve
+  ```
+
+  Но обычно на Windows Ollama работает как фоновое приложение (иконка в трее),
+  а не через `ollama serve` в терминале. В этом случае так просто переменную
+  не подставить — надо задать её как системную/пользовательскую переменную
+  окружения (Панель управления → Система → Дополнительные параметры системы →
+  Переменные среды → добавить `OLLAMA_HOST=0.0.0.0`), а затем **полностью
+  перезапустить Ollama** (выйти из трея, запустить заново) — иначе
+  приложение не подхватит новое значение.
+
+- **Файрвол Windows может блокировать соединение.** Docker Desktop поднимает
+  контейнеры в отдельной виртуальной сети (WSL2), и первое обращение к порту
+  `11434` может быть заблокировано Брандмауэром Windows. Если после всех
+  настроек бот всё равно не может достучаться до Ollama — проверьте, не
+  просит ли Windows разрешить доступ (обычно всплывает диалог при первом
+  запуске `ollama serve`/приложения), и при необходимости добавьте входящее
+  правило для порта 11434 в Брандмауэре Windows.
+
+- **Сохраняйте `.env` в кодировке UTF-8 без BOM.** Если создать/отредактировать
+  `.env` через обычный Блокнот (Notepad), он может добавить BOM-байты в
+  начало файла — тогда первая переменная (обычно `TELEGRAM_BOT_TOKEN`) не
+  распознается. Используйте VS Code или другой редактор с явным выбором
+  кодировки «UTF-8» (без BOM).
+
+- **Команды запуска — те же.** `docker compose up --build -d`,
+  `docker compose logs -f`, `docker compose down` выполняются одинаково что
+  в PowerShell, что в cmd, что в WSL — сам Docker Desktop абстрагирует
+  различия. Рекомендуется использовать бэкенд WSL2 (настройка по умолчанию
+  в актуальных версиях Docker Desktop).
+
+### Возможные проблемы при запуске в Docker
+
+- **«Не удалось подключиться к Ollama»** — проверьте, что `OLLAMA_BASE_URL`
+  в `.env` указывает на `host.docker.internal`, а не `localhost`, и что
+  Ollama запущена с `OLLAMA_HOST=0.0.0.0` (см. шаг 2).
+- **`host.docker.internal` не резолвится** — убедитесь, что в
+  `docker-compose.yml` (или в `docker run`) присутствует
+  `--add-host=host.docker.internal:host-gateway`; это требует Docker
+  Engine ≥ 20.10.
+
 ## Расширение: добавление нового локального LLM-раннера
 
 LLM-интеграции реализованы через единый интерфейс (`src/llm/LlmRunner.js`),
