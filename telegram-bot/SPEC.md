@@ -112,6 +112,12 @@ telegram-bot/
     `parse_mode`; если Telegram вернёт ошибку парсинга разметки, повторно
     отправить тот же текст без `parse_mode`, чтобы не терять сообщение
     (см. `markdown.js` ниже).
+- `setMyCommands(commands)` → `POST https://api.telegram.org/bot<TOKEN>/setMyCommands`
+  - Регистрирует список команд бота в меню Telegram (кнопка "/" рядом с
+    полем ввода). Вызывается один раз при старте (`src/index.js`) со списком
+    `[{ command: "new", description: "..." }]`. Ошибка регистрации
+    логируется, но не останавливает запуск бота — сами команды всё равно
+    обрабатываются в `polling.js` независимо от меню.
 
 ### `src/telegram/markdown.js`
 

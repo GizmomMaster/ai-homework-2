@@ -39,6 +39,15 @@ export class TelegramClient {
   }
 
   /**
+   * Регистрирует список команд бота — они появляются в меню Telegram
+   * (кнопка "/" рядом с полем ввода).
+   * @param {Array<{ command: string, description: string }>} commands
+   */
+  async setMyCommands(commands) {
+    return this.#call("setMyCommands", { commands });
+  }
+
+  /**
    * Отправляет текстовое сообщение в чат. Автоматически режет текст
    * на части, если он превышает лимит Telegram в 4096 символов.
    *
