@@ -6,7 +6,11 @@ import { createLlmRunner } from "./llm/index.js";
 const telegramClient = new TelegramClient(config.telegramBotToken);
 const llmRunner = createLlmRunner(config);
 
-startPolling({ telegramClient, llmRunner }).catch((error) => {
+startPolling({
+  telegramClient,
+  llmRunner,
+  maxMessageLength: config.maxMessageLength,
+}).catch((error) => {
   console.error("Бот аварийно завершил работу:", error);
   process.exit(1);
 });
