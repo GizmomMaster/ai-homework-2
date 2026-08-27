@@ -1,7 +1,7 @@
 {
   "name": "telegram-local-llm-bot",
   "version": "1.0.0",
-  "description": "Telegram-бот, пересылающий сообщения в локальную LLM (Ollama) без сторонних Telegram-библиотек",
+  "description": "Telegram-адаптер Core Orchestrator: транслирует Telegram Bot API в HTTP-контракт Core",
   "type": "module",
   "private": true,
   "main": "src/index.js",
@@ -11,8 +11,5 @@
   },
   "engines": {
     "node": ">=18"
-  },
-  "dependencies": {
-    "better-sqlite3": "^11.10.0"
   }
 }

@@ -10,9 +10,11 @@ const LONG_POLL_TIMEOUT_SEC = 30;
 export class TelegramClient {
   /**
    * @param {string} token
+   * @param {{ apiBaseUrl?: string }} [options] адрес Bot API; переопределяется
+   *   для сквозных тестов и локальных прокси.
    */
-  constructor(token) {
-    this.apiBase = `https://api.telegram.org/bot${token}`;
+  constructor(token, { apiBaseUrl = "https://api.telegram.org" } = {}) {
+    this.apiBase = `${apiBaseUrl.replace(/\/+$/, "")}/bot${token}`;
   }
 
   async #call(method, payload, { signal } = {}) {

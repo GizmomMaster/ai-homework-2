@@ -1,7 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { commandMenu, commands, findCommand } from "../src/handlers/commands.js";
-import { createFakeTelegramClient, createTestRepository, muteConsole } from "./helpers.js";
+import { createFakeCoreClient, createFakeTelegramClient, muteConsole } from "./helpers.js";
+
+function context(coreOptions) {
+  const telegramClient = createFakeTelegramClient();
+  const coreClient = createFakeCoreClient(coreOptions);
+  return { chatId: 8123, telegramClient, coreClient };
+}
 
 describe("реестр команд", () => {
   describe("findCommand", () => {
@@ -64,44 +70,58 @@ describe("реестр команд", () => {
   });
 
   describe("/new", () => {
-    it("создаёт новую сессию и подтверждает пользователю", async (t) => {
+    it("просит Core сбросить контекст и подтверждает пользователю", async (t) => {
       muteConsole(t);
-      const chatRepository = createTestRepository();
-      const telegramClient = createFakeTelegramClient();
-      const before = chatRepository.getOrCreateActiveSession(1);
+      const ctx = context();
 
-      await findCommand("/new").handle({ chatId: 1, telegramClient, chatRepository });
+      await findCommand("/new").handle(ctx);
 
-      assert.notEqual(chatRepository.getOrCreateActiveSession(1).id, before.id);
-      assert.match(telegramClient.lastText(), /новый диалог/i);
+      assert.deepEqual(ctx.coreClient.resets, [{ chatId: 8123 }]);
+      assert.match(ctx.telegramClient.lastText(), /новый диалог/i);
+    });
+
+    it("сообщает о недоступности сервиса и не подтверждает сброс", async (t) => {
+      muteConsole(t);
+      const ctx = context({ failReset: true });
+
+      await findCommand("/new").handle(ctx);
+
+      assert.match(ctx.telegramClient.lastText(), /недоступен/i);
+      assert.equal(ctx.coreClient.resets.length, 0);
+    });
+
+    it("не отправляет команду в модель как обычный текст", async (t) => {
+      muteConsole(t);
+      const ctx = context();
+
+      await findCommand("/new").handle(ctx);
+
+      assert.equal(ctx.coreClient.sentMessages.length, 0);
     });
   });
 
   describe("/help", () => {
-    it("присылает справку с упоминанием команд и не трогает сессию", async (t) => {
+    it("присылает справку и не трогает Core", async (t) => {
       muteConsole(t);
-      const chatRepository = createTestRepository();
-      const telegramClient = createFakeTelegramClient();
-      const before = chatRepository.getOrCreateActiveSession(1);
+      const ctx = context();
 
-      await findCommand("/help").handle({ chatId: 1, telegramClient, chatRepository });
+      await findCommand("/help").handle(ctx);
 
-      assert.match(telegramClient.lastText(), /\/new/);
-      assert.equal(chatRepository.getOrCreateActiveSession(1).id, before.id);
+      assert.match(ctx.telegramClient.lastText(), /\/new/);
+      assert.equal(ctx.coreClient.resets.length, 0);
+      assert.equal(ctx.coreClient.sentMessages.length, 0);
     });
   });
 
   describe("/start", () => {
     it("приветствует и начинает чистый диалог", async (t) => {
       muteConsole(t);
-      const chatRepository = createTestRepository();
-      const telegramClient = createFakeTelegramClient();
-      const before = chatRepository.getOrCreateActiveSession(1);
+      const ctx = context();
 
-      await findCommand("/start").handle({ chatId: 1, telegramClient, chatRepository });
+      await findCommand("/start").handle(ctx);
 
-      assert.match(telegramClient.lastText(), /привет/i);
-      assert.notEqual(chatRepository.getOrCreateActiveSession(1).id, before.id);
+      assert.match(ctx.telegramClient.lastText(), /привет/i);
+      assert.deepEqual(ctx.coreClient.resets, [{ chatId: 8123 }]);
     });
   });
 });

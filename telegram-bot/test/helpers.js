@@ -1,11 +1,4 @@
 import http from "node:http";
-import { createDatabase } from "../src/db/database.js";
-import { ChatRepository } from "../src/db/chatRepository.js";
-
-/** Репозиторий поверх БД в памяти — тесты не трогают файловую систему. */
-export function createTestRepository() {
-  return new ChatRepository(createDatabase(":memory:"));
-}
 
 /**
  * Заглушка TelegramClient: запоминает отправленное вместо похода в сеть.
@@ -25,18 +18,26 @@ export function createFakeTelegramClient({ failSendMessage = false } = {}) {
 }
 
 /**
- * Заглушка LlmRunner. `reply` — либо объект ответа, либо функция от messages.
- * Запоминает историю, с которой её вызывали.
+ * Заглушка CoreClient: копит вызовы и умеет падать.
+ * @param {{ failSendMessage?: boolean, failReset?: boolean }} [options]
  */
-export function createFakeLlmRunner(reply = { content: "ответ", promptTokens: 10, completionTokens: 5 }) {
-  const calls = [];
+export function createFakeCoreClient({ failSendMessage = false, failReset = false } = {}) {
+  const sentMessages = [];
+  const resets = [];
+  let jobCounter = 0;
+
   return {
-    calls,
-    async chat(messages) {
-      calls.push(messages);
-      const result = typeof reply === "function" ? reply(messages) : reply;
-      if (result instanceof Error) throw result;
-      return result;
+    sentMessages,
+    resets,
+    async sendMessage({ chatId, text, updateId }) {
+      if (failSendMessage) throw new Error("Core недоступен");
+      sentMessages.push({ chatId, text, updateId });
+      return { jobId: `j_${(jobCounter += 1)}`, status: "queued" };
+    },
+    async reset({ chatId }) {
+      if (failReset) throw new Error("Core недоступен");
+      resets.push({ chatId });
+      return { conversationId: 1, sessionId: resets.length };
     },
   };
 }
@@ -51,10 +52,16 @@ export async function startTestServer(handler) {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", async () => {
-      const payload = body ? JSON.parse(body) : {};
-      requests.push({ url: req.url, payload });
-      const result = await handler(payload, req);
-      const { status = 200, json = { ok: true, result: {} }, delayMs = 0 } = result ?? {};
+      let payload;
+      try {
+        payload = body ? JSON.parse(body) : {};
+      } catch {
+        payload = undefined;
+      }
+      requests.push({ url: req.url, method: req.method, payload });
+
+      const { status = 200, json = { ok: true, result: {} }, delayMs = 0 } =
+        (await handler(payload, req)) ?? {};
       if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(typeof json === "string" ? json : JSON.stringify(json));
@@ -66,6 +73,7 @@ export async function startTestServer(handler) {
 
   return {
     requests,
+    port,
     baseUrl: `http://127.0.0.1:${port}`,
     async close() {
       await new Promise((resolve) => server.close(resolve));

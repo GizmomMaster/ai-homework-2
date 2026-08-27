@@ -1,10 +1,9 @@
 import { fileURLToPath } from "node:url";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { loadEnvFile } from "./env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const projectRoot = join(__dirname, "..");
-loadEnvFile(join(projectRoot, ".env"));
+loadEnvFile(join(__dirname, "..", ".env"));
 
 function required(name) {
   const value = process.env[name];
@@ -30,24 +29,26 @@ function positiveInt(name, defaultValue) {
   return value;
 }
 
-/**
- * Относительные пути к БД разрешаются от корня проекта, а не от текущего
- * рабочего каталога: иначе `node src/index.js`, запущенный из другого места,
- * создал бы вторую пустую базу и «потерял» историю переписки.
- */
-function resolveFromProjectRoot(path) {
-  return isAbsolute(path) || path === ":memory:" ? path : resolve(projectRoot, path);
-}
-
 export const config = {
   telegramBotToken: required("TELEGRAM_BOT_TOKEN"),
-  llmProvider: process.env.LLM_PROVIDER || "ollama",
+  /** Адрес Bot API. Меняется только для сквозных тестов и локальных прокси. */
+  telegramApiBaseUrl: process.env.TELEGRAM_API_BASE_URL || "https://api.telegram.org",
   maxMessageLength: positiveInt("MAX_MESSAGE_LENGTH", 1000),
-  contextWindowTokens: positiveInt("CONTEXT_WINDOW_TOKENS", 50000),
-  sqlitePath: resolveFromProjectRoot(process.env.SQLITE_DB_PATH || "./data/bot.db"),
-  ollama: {
-    baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
-    model: process.env.OLLAMA_MODEL || "llama3",
-    timeoutMs: positiveInt("OLLAMA_TIMEOUT_MS", 300000),
+
+  /** Куда адаптер отправляет сообщения пользователей. */
+  core: {
+    baseUrl: process.env.CORE_BASE_URL || "http://localhost:8080",
+    timeoutMs: positiveInt("CORE_TIMEOUT_MS", 10000),
+    // Core отвечает сразу, не дожидаясь модели, поэтому долгих ожиданий тут
+    // нет — повторы нужны только на случай, что Core ещё поднимается.
+    retries: positiveInt("CORE_RETRIES", 3),
+    retryDelayMs: positiveInt("CORE_RETRY_DELAY_MS", 1000),
+  },
+
+  /** Локальный сервер, на который Core доставляет готовые ответы. */
+  callback: {
+    port: positiveInt("CALLBACK_PORT", 8081),
+    host: process.env.CALLBACK_HOST || "0.0.0.0",
+    path: process.env.CALLBACK_PATH || "/callbacks/replies",
   },
 };

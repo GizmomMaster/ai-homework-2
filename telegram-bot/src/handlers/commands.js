@@ -1,11 +1,11 @@
-import { log } from "../logger.js";
+import { log, logError } from "../logger.js";
 import { sendSafely } from "../telegram/send.js";
 
 /**
  * @typedef {Object} CommandContext
  * @property {number|string} chatId
  * @property {import("../telegram/client.js").TelegramClient} telegramClient
- * @property {import("../db/chatRepository.js").ChatRepository} chatRepository
+ * @property {import("../core/CoreClient.js").CoreClient} coreClient
  *
  * @typedef {Object} BotCommand
  * @property {string} command      имя без ведущего слэша
@@ -17,8 +17,11 @@ const NEW_CHAT_TEXT =
   "Начат новый диалог. История предыдущего общения сохранена, " +
   "но больше не используется как контекст.";
 
+const CORE_UNAVAILABLE_TEXT =
+  "Сервис временно недоступен, попробуйте ещё раз через минуту.";
+
 const HELP_TEXT =
-  "Я передаю ваши сообщения локальной языковой модели и присылаю её ответ.\n\n" +
+  "Я передаю ваши сообщения языковой модели и присылаю её ответ.\n\n" +
   "Диалог ведётся с учётом истории переписки, поэтому можно задавать " +
   "уточняющие вопросы.\n\n" +
   "Команды:\n" +
@@ -26,10 +29,26 @@ const HELP_TEXT =
   "/help — эта справка\n\n" +
   "Когда контекст диалога заполнится, я попрошу начать новый через /new.";
 
+/** Сбрасывает контекст в Core; при недоступности честно сообщает об этом. */
+async function resetConversation({ chatId, telegramClient, coreClient }, confirmation) {
+  try {
+    await coreClient.reset({ chatId });
+  } catch (error) {
+    logError(`[chat ${chatId}] Не удалось сбросить контекст в Core:`, error);
+    await sendSafely(telegramClient, chatId, CORE_UNAVAILABLE_TEXT);
+    return;
+  }
+
+  log(`[chat ${chatId}] Начат новый диалог.`);
+  await sendSafely(telegramClient, chatId, confirmation);
+}
+
 /**
  * Реестр команд бота — единственный источник правды и для меню Telegram
- * (`setMyCommands`), и для обработки входящих сообщений в polling.
- * Добавление команды = одна запись здесь, без правок в других файлах.
+ * (`setMyCommands`), и для обработки входящих сообщений.
+ *
+ * Разбор синтаксиса команды — забота адаптера (он знает про `/new@BotName`),
+ * а её смысл живёт в Core: сброс контекста делает `POST …/reset`.
  *
  * @type {BotCommand[]}
  */
@@ -37,20 +56,12 @@ export const commands = [
   {
     command: "new",
     description: "Начать новый диалог (сбросить контекст)",
-    async handle({ chatId, telegramClient, chatRepository }) {
-      chatRepository.createSession(chatId);
-      log(`[chat ${chatId}] Начат новый диалог по команде /new.`);
-      await sendSafely(telegramClient, chatId, NEW_CHAT_TEXT);
-    },
+    handle: (ctx) => resetConversation(ctx, NEW_CHAT_TEXT),
   },
   {
     command: "start",
     description: "Начать работу с ботом",
-    async handle({ chatId, telegramClient, chatRepository }) {
-      chatRepository.createSession(chatId);
-      log(`[chat ${chatId}] Пользователь начал работу с ботом (/start).`);
-      await sendSafely(telegramClient, chatId, `Привет! ${HELP_TEXT}`);
-    },
+    handle: (ctx) => resetConversation(ctx, `Привет! ${HELP_TEXT}`),
   },
   {
     command: "help",

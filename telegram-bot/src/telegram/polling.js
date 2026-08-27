@@ -1,4 +1,3 @@
-import { handleMessage } from "../handlers/messageHandler.js";
 import { findCommand } from "../handlers/commands.js";
 import { log, logError } from "../logger.js";
 import { sendSafely } from "./send.js";
@@ -9,31 +8,29 @@ const NON_TEXT_WARNING =
   "Я умею обрабатывать только текстовые сообщения. Файлы, изображения, " +
   "голосовые и другие вложения не поддерживаются.";
 
+const CORE_UNAVAILABLE_TEXT =
+  "Сервис временно недоступен, попробуйте ещё раз через минуту.";
+
 /**
- * Бесконечный цикл long polling: получает обновления от Telegram и
- * обрабатывает текстовые сообщения. Сетевые ошибки не останавливают цикл.
- * Не-текстовые сообщения и сообщения, превышающие лимит длины, отклоняются
- * с предупреждением пользователю — до обращения к LLM. Команды бота
- * (`/new`, `/start`, `/help`) обрабатываются реестром из handlers/commands.js.
+ * Бесконечный цикл long polling: получает обновления от Telegram и передаёт
+ * сообщения в Core. Ответ модели сюда не возвращается — Core доставит его
+ * отдельным запросом на callback-сервер адаптера.
  *
- * Завершается, когда сработает `signal` (graceful shutdown).
+ * Не-текстовые и слишком длинные сообщения отклоняются здесь же, до обращения
+ * к Core. Команды бота разбираются реестром из handlers/commands.js.
  *
  * @param {{
  *   telegramClient: import("./client.js").TelegramClient,
- *   llmRunner: import("../llm/LlmRunner.js").LlmRunner,
- *   chatRepository: import("../db/chatRepository.js").ChatRepository,
+ *   coreClient: import("../core/CoreClient.js").CoreClient,
  *   maxMessageLength: number,
- *   contextWindowTokens: number,
  *   signal?: AbortSignal,
  *   retryDelayMs?: number,
  * }} params
  */
 export async function startPolling({
   telegramClient,
-  llmRunner,
-  chatRepository,
+  coreClient,
   maxMessageLength,
-  contextWindowTokens,
   signal,
   retryDelayMs = DEFAULT_RETRY_DELAY_MS,
 }) {
@@ -55,13 +52,7 @@ export async function startPolling({
     for (const update of updates) {
       if (signal?.aborted) break;
       offset = update.update_id + 1;
-      await handleUpdate(update, {
-        telegramClient,
-        llmRunner,
-        chatRepository,
-        maxMessageLength,
-        contextWindowTokens,
-      });
+      await handleUpdate(update, { telegramClient, coreClient, maxMessageLength });
     }
   }
 
@@ -70,11 +61,9 @@ export async function startPolling({
 
 /**
  * Маршрутизация одного апдейта: отсев не-текста и слишком длинных сообщений,
- * команды, обычные сообщения в LLM.
+ * команды, остальное — в Core.
  */
-async function handleUpdate(update, deps) {
-  const { telegramClient, llmRunner, chatRepository, maxMessageLength, contextWindowTokens } = deps;
-
+async function handleUpdate(update, { telegramClient, coreClient, maxMessageLength }) {
   const message = update.message;
   const chatId = message?.chat?.id;
   if (chatId === undefined) return;
@@ -89,7 +78,7 @@ async function handleUpdate(update, deps) {
 
   const command = findCommand(text);
   if (command) {
-    await command.handle({ chatId, telegramClient, chatRepository });
+    await command.handle({ chatId, telegramClient, coreClient });
     return;
   }
 
@@ -106,14 +95,13 @@ async function handleUpdate(update, deps) {
     return;
   }
 
-  await handleMessage({
-    chatId,
-    text,
-    telegramClient,
-    llmRunner,
-    chatRepository,
-    contextWindowTokens,
-  });
+  try {
+    const job = await coreClient.sendMessage({ chatId, text, updateId: update.update_id });
+    log(`[chat ${chatId}] Сообщение передано в Core (job ${job.jobId}, ${text.length} симв.).`);
+  } catch (error) {
+    logError(`[chat ${chatId}] Не удалось передать сообщение в Core:`, error);
+    await sendSafely(telegramClient, chatId, CORE_UNAVAILABLE_TEXT);
+  }
 }
 
 /** Пауза, прерываемая сигналом остановки, — чтобы не ждать при shutdown. */

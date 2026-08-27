@@ -1,16 +1,33 @@
 import { config } from "./config.js";
 import { TelegramClient } from "./telegram/client.js";
 import { startPolling } from "./telegram/polling.js";
-import { createLlmRunner } from "./llm/index.js";
-import { createDatabase } from "./db/database.js";
-import { ChatRepository } from "./db/chatRepository.js";
+import { CoreClient } from "./core/CoreClient.js";
+import { createCallbackServer } from "./http/callbackServer.js";
+import { handleReply } from "./handlers/replyHandler.js";
 import { commandMenu } from "./handlers/commands.js";
 import { log, logError } from "./logger.js";
 
-const telegramClient = new TelegramClient(config.telegramBotToken);
-const llmRunner = createLlmRunner(config);
-const db = createDatabase(config.sqlitePath);
-const chatRepository = new ChatRepository(db);
+const telegramClient = new TelegramClient(config.telegramBotToken, {
+  apiBaseUrl: config.telegramApiBaseUrl,
+});
+const coreClient = new CoreClient(config.core);
+
+// Сервер для готовых ответов от Core. Поднимаем до старта polling: иначе
+// первый же ответ мог бы прийти в закрытый порт.
+const callbackServer = createCallbackServer({
+  path: config.callback.path,
+  onReply: (payload) => handleReply({ payload, telegramClient }),
+});
+
+await new Promise((resolve, reject) => {
+  callbackServer.once("error", reject);
+  callbackServer.listen(config.callback.port, config.callback.host, () => {
+    log(
+      `Приём ответов от Core: http://${config.callback.host}:${config.callback.port}${config.callback.path}`,
+    );
+    resolve();
+  });
+});
 
 // Меню команд берётся из того же реестра, что и обработчики, — список
 // в меню и реально работающие команды не могут разъехаться.
@@ -18,9 +35,9 @@ await telegramClient.setMyCommands(commandMenu()).catch((error) => {
   logError("Не удалось зарегистрировать команды бота в меню Telegram:", error);
 });
 
-// Graceful shutdown: докер при `docker compose down` шлёт SIGTERM, Ctrl+C —
-// SIGINT. Обрываем long polling и аккуратно закрываем БД, чтобы SQLite
-// успел сбросить WAL-журнал.
+log(`Core Orchestrator: ${config.core.baseUrl}`);
+
+// Graceful shutdown: docker compose down шлёт SIGTERM, Ctrl+C — SIGINT.
 const shutdown = new AbortController();
 for (const signalName of ["SIGINT", "SIGTERM"]) {
   process.once(signalName, () => {
@@ -32,17 +49,14 @@ for (const signalName of ["SIGINT", "SIGTERM"]) {
 try {
   await startPolling({
     telegramClient,
-    llmRunner,
-    chatRepository,
+    coreClient,
     maxMessageLength: config.maxMessageLength,
-    contextWindowTokens: config.contextWindowTokens,
     signal: shutdown.signal,
   });
 } catch (error) {
   logError("Бот аварийно завершил работу:", error);
-  db.close();
+  callbackServer.close();
   process.exit(1);
 }
 
-db.close();
-log("Бот остановлен.");
+callbackServer.close(() => log("Бот остановлен."));
