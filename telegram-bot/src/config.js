@@ -33,6 +33,8 @@ export const config = {
   telegramBotToken: required("TELEGRAM_BOT_TOKEN"),
   llmProvider: process.env.LLM_PROVIDER || "ollama",
   maxMessageLength: positiveInt("MAX_MESSAGE_LENGTH", 1000),
+  contextWindowTokens: positiveInt("CONTEXT_WINDOW_TOKENS", 50000),
+  sqlitePath: process.env.SQLITE_DB_PATH || "./data/bot.db",
   ollama: {
     baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
     model: process.env.OLLAMA_MODEL || "llama3",

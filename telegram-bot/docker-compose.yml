@@ -4,6 +4,12 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    # Файл SQLite с историей переписки хранится на хосте в ./data, чтобы
+    # переживать пересоздание контейнера (docker compose up --build и т.п.).
+    # Путь внутри контейнера должен совпадать с SQLITE_DB_PATH из .env
+    # (по умолчанию ./data/bot.db относительно рабочего каталога /app).
+    volumes:
+      - ./data:/app/data
     # Позволяет контейнеру достучаться до Ollama, запущенной на хосте,
     # по имени host.docker.internal (актуально для Linux; на Docker Desktop
     # для Mac/Windows это имя доступно из коробки).

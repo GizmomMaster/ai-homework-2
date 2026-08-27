@@ -1,7 +1,12 @@
 /** @typedef {import("./LlmRunner.js").LlmRunner} LlmRunner */
+/** @typedef {import("./LlmRunner.js").ChatMessage} ChatMessage */
+/** @typedef {import("./LlmRunner.js").ChatResult} ChatResult */
 
 /**
- * Реализация LlmRunner поверх Ollama HTTP API (эндпоинт /api/generate).
+ * Реализация LlmRunner поверх Ollama HTTP API (эндпоинт /api/chat).
+ * Используется /api/chat, а не /api/generate, чтобы передавать модели
+ * полную историю сообщений сессии и получать честную статистику по токенам
+ * (`prompt_eval_count`/`eval_count`) для отслеживания контекстного окна.
  * @implements {LlmRunner}
  */
 export class OllamaRunner {
@@ -14,18 +19,18 @@ export class OllamaRunner {
   }
 
   /**
-   * @param {string} prompt
-   * @returns {Promise<string>}
+   * @param {ChatMessage[]} messages
+   * @returns {Promise<ChatResult>}
    */
-  async generate(prompt) {
+  async chat(messages) {
     let response;
     try {
-      response = await fetch(`${this.baseUrl}/api/generate`, {
+      response = await fetch(`${this.baseUrl}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: this.model,
-          prompt,
+          messages,
           stream: false,
         }),
       });
@@ -44,10 +49,14 @@ export class OllamaRunner {
     }
 
     const data = await response.json();
-    if (typeof data.response !== "string") {
+    if (!data.message || typeof data.message.content !== "string") {
       throw new Error("Некорректный формат ответа от Ollama.");
     }
 
-    return data.response;
+    return {
+      content: data.message.content,
+      promptTokens: data.prompt_eval_count ?? 0,
+      completionTokens: data.eval_count ?? 0,
+    };
   }
 }
