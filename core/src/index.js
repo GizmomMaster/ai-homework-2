@@ -1,27 +1,35 @@
 import { config } from "./config.js";
-import { createRoutes } from "./http/routes.js";
-import { createStubHandlers } from "./http/stubHandlers.js";
-import { createServer } from "./http/server.js";
+import { createApp } from "./app.js";
 import { log, logError } from "./logger.js";
 
-const router = createRoutes(createStubHandlers());
-const server = createServer({ router, maxBodyBytes: config.maxBodyBytes });
+const app = createApp({ config });
 
-server.listen(config.port, config.host, () => {
-  log(`Core Orchestrator слушает http://${config.host}:${config.port} (режим: заглушки)`);
+app.start();
+app.server.listen(config.port, config.host, () => {
+  log(`Core Orchestrator слушает http://${config.host}:${config.port}`);
+  log(`Модель: ${config.llmProvider}/${config.ollama.model}, контекст ${config.contextWindowTokens} токенов.`);
+
+  const adapters = Object.keys(config.callbackUrls);
+  if (adapters.length === 0) {
+    log("ВНИМАНИЕ: не задан ни один callback-адрес адаптера — ответы доставить будет некуда.");
+  } else {
+    log(`Адаптеры: ${adapters.join(", ")}.`);
+  }
 });
 
-server.on("error", (error) => {
+app.server.on("error", (error) => {
   logError("Не удалось запустить HTTP-сервер:", error);
   process.exit(1);
 });
 
 // Graceful shutdown: docker compose down шлёт SIGTERM, Ctrl+C — SIGINT.
-// Даём серверу дообслужить открытые запросы и только потом выходим.
+// Порядок важен: перестаём принимать запросы, доводим текущее задание,
+// затем закрываем БД, чтобы SQLite сбросил WAL-журнал.
 for (const signalName of ["SIGINT", "SIGTERM"]) {
   process.once(signalName, () => {
     log(`Получен ${signalName}, завершаю работу...`);
-    server.close(() => {
+    app.server.close(async () => {
+      await app.stop();
       log("Core Orchestrator остановлен.");
     });
   });
