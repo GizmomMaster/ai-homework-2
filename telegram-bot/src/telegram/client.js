@@ -1,3 +1,5 @@
+import { logError } from "../logger.js";
+
 const TELEGRAM_MESSAGE_LIMIT = 4096;
 
 /**
@@ -39,12 +41,34 @@ export class TelegramClient {
   /**
    * Отправляет текстовое сообщение в чат. Автоматически режет текст
    * на части, если он превышает лимит Telegram в 4096 символов.
-   * @param {{ chatId: number|string, text: string }} params
+   *
+   * @param {{ chatId: number|string, text: string, parseMode?: "HTML" }} params
+   *   `text` уже должен быть в формате `parseMode` (например, HTML-разметка
+   *   Telegram, если указан `parseMode: "HTML"`).
    */
-  async sendMessage({ chatId, text }) {
+  async sendMessage({ chatId, text, parseMode }) {
     const chunks = splitIntoChunks(text, TELEGRAM_MESSAGE_LIMIT);
     for (const chunk of chunks) {
-      await this.#call("sendMessage", { chat_id: chatId, text: chunk });
+      await this.#sendChunk(chatId, chunk, parseMode);
+    }
+  }
+
+  async #sendChunk(chatId, text, parseMode) {
+    if (!parseMode) {
+      await this.#call("sendMessage", { chat_id: chatId, text });
+      return;
+    }
+
+    try {
+      await this.#call("sendMessage", { chat_id: chatId, text, parse_mode: parseMode });
+    } catch (error) {
+      // Разметка могла не распарситься (например, теги оказались разорваны
+      // при нарезке на части) — не теряем сообщение, а отправляем как есть.
+      logError(
+        `[chat ${chatId}] Не удалось отправить сообщение с parse_mode=${parseMode}, отправляю как обычный текст:`,
+        error,
+      );
+      await this.#call("sendMessage", { chat_id: chatId, text });
     }
   }
 }

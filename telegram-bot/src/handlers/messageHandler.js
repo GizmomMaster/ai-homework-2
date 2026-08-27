@@ -1,4 +1,5 @@
 import { log, logError } from "../logger.js";
+import { markdownToTelegramHtml } from "../telegram/markdown.js";
 
 /**
  * Обрабатывает одно входящее текстовое сообщение в рамках текущей сессии
@@ -51,7 +52,11 @@ export async function handleMessage({
     chatRepository.addMessage(session.id, "assistant", content);
     chatRepository.setSessionTokens(session.id, totalTokens);
 
-    await telegramClient.sendMessage({ chatId, text: content });
+    await telegramClient.sendMessage({
+      chatId,
+      text: markdownToTelegramHtml(content),
+      parseMode: "HTML",
+    });
     log(
       `[chat ${chatId}] Запрос успешно обработан за ${Date.now() - startedAt} мс ` +
         `(контекст: ${totalTokens}/${contextWindowTokens} токенов).`,

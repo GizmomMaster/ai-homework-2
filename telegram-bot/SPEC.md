@@ -41,7 +41,8 @@ telegram-bot/
 │   ├── config.js               # чтение и валидация переменных окружения
 │   ├── telegram/
 │   │   ├── client.js           # тонкий HTTP-клиент Telegram Bot API
-│   │   └── polling.js          # цикл long polling (getUpdates → обработка)
+│   │   ├── polling.js          # цикл long polling (getUpdates → обработка)
+│   │   └── markdown.js         # Markdown (ответ LLM) → Telegram HTML
 │   ├── llm/
 │   │   ├── LlmRunner.js         # интерфейс/контракт runner'а (JSDoc typedef)
 │   │   ├── OllamaRunner.js     # реализация под Ollama
@@ -104,9 +105,27 @@ telegram-bot/
 
 - `getUpdates({ offset, timeout })` → `GET/POST https://api.telegram.org/bot<TOKEN>/getUpdates`
   - Использовать long polling: `timeout` ~30 сек на стороне Telegram.
-- `sendMessage({ chatId, text })` → `POST https://api.telegram.org/bot<TOKEN>/sendMessage`
+- `sendMessage({ chatId, text, parseMode? })` → `POST https://api.telegram.org/bot<TOKEN>/sendMessage`
   - Разбивать длинные ответы модели на части, если текст превышает лимит
     Telegram в 4096 символов на сообщение.
+  - Если передан `parseMode` (используется `"HTML"`) — отправлять с
+    `parse_mode`; если Telegram вернёт ошибку парсинга разметки, повторно
+    отправить тот же текст без `parse_mode`, чтобы не терять сообщение
+    (см. `markdown.js` ниже).
+
+### `src/telegram/markdown.js`
+
+- `markdownToTelegramHtml(markdown): string` — конвертирует Markdown, который
+  обычно отдают LLM (`**жирный**`, `*курсив*`, `` `код` ``, блоки кода в
+  тройных кавычках, `~~зачёркнутый~~`, `[текст](url)`, заголовки `#`), в
+  HTML-подмножество, которое Telegram поддерживает при `parse_mode=HTML`
+  (только теги `b`/`i`/`s`/`code`/`pre`/`a`).
+- Заголовки превращаются в жирную строку (Telegram не поддерживает
+  `<h1>`-`<h6>`); списки/цитаты не оформляются отдельными тегами (Telegram их
+  не поддерживает в HTML-режиме) — как обычный текст с `-`/`>` они и так
+  читаемы.
+- Применяется только к ответу модели в `messageHandler.js` — собственные
+  служебные сообщения бота (предупреждения, `/new`) остаются простым текстом.
 
 ### `src/telegram/polling.js`
 
@@ -130,7 +149,8 @@ telegram-bot/
    `llmRunner.chat(messages)`.
 5. При успехе — сохранить ответ (`role: "assistant"`), обновить
    `total_tokens` сессии, отправить `telegramClient.sendMessage({ chatId,
-   text: response.content })`. Если новый `total_tokens` достиг лимита —
+   text: markdownToTelegramHtml(response.content), parseMode: "HTML" })`
+   (см. п. 5, `markdown.js`). Если новый `total_tokens` достиг лимита —
    дополнительно отправить предупреждение про `/new`.
 6. При ошибке (LLM недоступна, таймаут и т.п.) — отправить пользователю
    сообщение об ошибке, залогировать причину в консоль на сервере.
