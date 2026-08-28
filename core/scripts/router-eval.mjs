@@ -28,6 +28,7 @@
  */
 import { config } from "../src/config.js";
 import { OllamaRunner } from "../src/llm/OllamaRunner.js";
+import { LLM_ERROR } from "../src/llm/LlmRunner.js";
 
 const INTENTS = ["THEORY_QUESTION", "TASK_REQUEST", "CLARIFICATION_NEEDED", "OUT_OF_SCOPE"];
 
@@ -259,6 +260,9 @@ async function main() {
         content = result.content;
         stats.completionTokens.push(result.completionTokens);
       } catch (error) {
+        // Недоступная Ollama — не результат замера, а неверная настройка:
+        // перебирать ради неё оставшиеся случаи бессмысленно.
+        if (error.code === LLM_ERROR.unavailable) throw error;
         outcomes.push(`ОШИБКА: ${error.code ?? error.name}`);
         if (args.verbose) console.log(`    ${error.message}`);
         continue;
