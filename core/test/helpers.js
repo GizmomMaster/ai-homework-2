@@ -34,16 +34,43 @@ export function createTestRepositories() {
 }
 
 /**
+ * Заглушка маршрутизатора. `verdict` — объект вердикта, функция от входа
+ * или Error.
+ */
+export function createFakeRouter(verdict = { intent: "THEORY_QUESTION" }) {
+  const calls = [];
+  return {
+    calls,
+    async classify(input) {
+      calls.push(input);
+      const result = typeof verdict === "function" ? verdict(input) : verdict;
+      if (result instanceof Error) throw result;
+      return {
+        isCryptoRelated: true,
+        confidence: 0.9,
+        topicSummary: "тема",
+        usage: { promptTokens: 20, completionTokens: 8 },
+        ...result,
+      };
+    },
+  };
+}
+
+/**
  * Заглушка LlmRunner. `reply` — объект ответа, функция от messages или Error.
  */
 export function createFakeLlmRunner(
   reply = { content: "ответ", promptTokens: 10, completionTokens: 5 },
 ) {
   const calls = [];
+  const options = [];
   return {
     calls,
-    async chat(messages) {
+    /** Опции вызова параллельным массивом: дописывать их в `calls` нельзя — тесты сравнивают его целиком. */
+    options,
+    async chat(messages, callOptions) {
       calls.push(messages);
+      options.push(callOptions);
       const result = typeof reply === "function" ? reply(messages) : reply;
       if (result instanceof Error) throw result;
       return result;
@@ -78,12 +105,13 @@ export function createFakeCallbackTransport({ failTimes = 0, status = 200 } = {}
  * Поднимает Core целиком (БД в памяти, подменённые модель и транспорт
  * callback'ов) и отдаёт `request` поверх настоящего HTTP.
  */
-export async function startCoreApp({ llmRunner, transport, config: overrides } = {}) {
+export async function startCoreApp({ llmRunner, routerAgent, transport, config: overrides } = {}) {
   const config = testConfig(overrides);
   const callbackTransport = transport ?? createFakeCallbackTransport();
   const app = createApp({
     config,
     llmRunner: llmRunner ?? createFakeLlmRunner(),
+    routerAgent: routerAgent ?? createFakeRouter(),
     fetchImpl: callbackTransport.fetchImpl,
   });
 

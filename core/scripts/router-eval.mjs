@@ -41,27 +41,9 @@
 import { config } from "../src/config.js";
 import { OllamaRunner } from "../src/llm/OllamaRunner.js";
 import { LLM_ERROR } from "../src/llm/LlmRunner.js";
+import { ROUTER_PROMPT, ROUTER_SCHEMA, ROUTER_INTENT } from "../src/agents/RouterAgent.js";
 
-const INTENTS = ["THEORY_QUESTION", "TASK_REQUEST", "CLARIFICATION_NEEDED", "OUT_OF_SCOPE"];
-
-/**
- * Схема ответа маршрутизатора из §2 спецификации. При `--format=schema`
- * ограничивает генерацию грамматикой: структурно неверный ответ и выдуманное
- * имя интента становятся невозможны.
- */
-const ROUTER_SCHEMA = {
-  type: "object",
-  properties: {
-    intent: { type: "string", enum: INTENTS },
-    isCryptoRelated: { type: "boolean" },
-    confidence: { type: "number" },
-    topicSummary: { type: "string" },
-    reasoning: { type: "string" },
-    clarificationQuestion: { type: ["string", "null"] },
-    outOfScopeReason: { type: ["string", "null"] },
-  },
-  required: ["intent", "isCryptoRelated", "confidence", "topicSummary"],
-};
+const INTENTS = Object.values(ROUTER_INTENT);
 
 /** Системный промпт из спецификации, дословно. */
 const PROMPT_RU = `Ты — Агент-Маршрутизатор (Router & Intent Classifier) в AI-системе для криптотрейдеров.
@@ -275,9 +257,17 @@ async function main() {
 
   const format =
     args.format === "schema" ? ROUTER_SCHEMA : args.format === "json" ? "json" : undefined;
-  const basePrompt = args.lang === "en" ? PROMPT_EN : PROMPT_RU;
-  const rules = args.lang === "en" ? RULES_EN : RULES_RU;
-  const systemPrompt = args.prompt === "v2" ? basePrompt + rules : basePrompt;
+  // v2 по-русски — это в точности боевой промпт из RouterAgent: замер и код
+  // не должны расходиться в формулировках. Остальные сочетания собираются
+  // здесь, они существуют только для сравнения.
+  const systemPrompt =
+    args.prompt === "v2"
+      ? args.lang === "en"
+        ? PROMPT_EN + RULES_EN
+        : ROUTER_PROMPT
+      : args.lang === "en"
+        ? PROMPT_EN
+        : PROMPT_RU;
 
   console.log(
     `Модель: ${model}   Ollama: ${baseUrl}  (${baseUrlSource})\n` +

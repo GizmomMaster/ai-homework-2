@@ -7,10 +7,11 @@ import { JOB_STATUS } from "../src/db/jobRepository.js";
 import {
   createFakeCallbackTransport,
   createFakeLlmRunner,
+  createFakeRouter,
   createTestRepositories,
   muteConsole,
   waitFor,
-} from "./helpers.js";
+ } from "./helpers.js";
 
 /**
  * Собирает JobRunner поверх общей БД. В отличие от тестов приложения целиком,
@@ -30,6 +31,7 @@ function buildEnv({ llmRunner, transport, jobRepositoryOverrides } = {}) {
       jobRepository: runnerJobs,
       dialogService: new DialogService({
         chatRepository,
+        routerAgent: createFakeRouter(),
         llmRunner: llmRunner ?? createFakeLlmRunner(),
         contextWindowTokens: 1000,
       }),

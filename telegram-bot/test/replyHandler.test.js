@@ -110,6 +110,39 @@ describe("handleReply", () => {
     });
   });
 
+  describe("отказ по скоупу", () => {
+    it("объясняет, чем система занимается, и не предлагает /new", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "rejected", reason: "out_of_scope" });
+
+      await ctx.run();
+
+      const text = ctx.telegramClient.lastText();
+      assert.match(text, /криптотрейдер/i);
+      // Новый диалог тут ни при чём: контекст не переполнен, запрос просто
+      // не наш — предложение сбросить историю сбивало бы с толку.
+      assert.doesNotMatch(text, /\/new/);
+    });
+
+    it("просит уточнить, когда модель не сформулировала вопрос сама", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "rejected", reason: "clarification_needed" });
+
+      await ctx.run();
+
+      assert.match(ctx.telegramClient.lastText(), /уточните/i);
+    });
+
+    it("оба отказа уходят обычным текстом, без разметки", async (t) => {
+      muteConsole(t);
+      for (const reason of ["out_of_scope", "clarification_needed"]) {
+        const ctx = deliver({ status: "rejected", reason });
+        await ctx.run();
+        assert.equal(ctx.telegramClient.sent[0].parseMode, undefined, reason);
+      }
+    });
+  });
+
   describe("ошибки модели", () => {
     it("для таймаута объясняет, что модель не успела", async (t) => {
       muteConsole(t);

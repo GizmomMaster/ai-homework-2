@@ -3,6 +3,7 @@ import { ChatRepository } from "./db/chatRepository.js";
 import { JobRepository } from "./db/jobRepository.js";
 import { createLlmRunner } from "./llm/index.js";
 import { DialogService } from "./domain/DialogService.js";
+import { RouterAgent } from "./agents/RouterAgent.js";
 import { CallbackDelivery } from "./jobs/CallbackDelivery.js";
 import { JobRunner } from "./jobs/JobRunner.js";
 import { createHandlers } from "./http/handlers.js";
@@ -17,17 +18,20 @@ import { createServer } from "./http/server.js";
  * @param {{
  *   config: import("./config.js").config,
  *   llmRunner?: import("./llm/LlmRunner.js").LlmRunner,
+ *   routerAgent?: import("./agents/RouterAgent.js").RouterAgent,
  *   fetchImpl?: typeof fetch,
  * }} params
  */
-export function createApp({ config, llmRunner, fetchImpl }) {
+export function createApp({ config, llmRunner, routerAgent, fetchImpl }) {
   const db = createDatabase(config.sqlitePath);
   const chatRepository = new ChatRepository(db);
   const jobRepository = new JobRepository(db);
 
+  const runner = llmRunner ?? createLlmRunner(config);
   const dialogService = new DialogService({
     chatRepository,
-    llmRunner: llmRunner ?? createLlmRunner(config),
+    routerAgent: routerAgent ?? new RouterAgent({ llmRunner: runner }),
+    llmRunner: runner,
     contextWindowTokens: config.contextWindowTokens,
   });
 

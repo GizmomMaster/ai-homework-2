@@ -47,7 +47,8 @@ describe("Core целиком", () => {
         externalId: "8123",
         status: "completed",
         reply: { text: "ответ модели" },
-        usage: { promptTokens: 40, completionTokens: 12, totalTokens: 52, contextLimit: 1000 },
+        // Маршрутизатор-заглушка тратит 20 + 8, отвечающий вызов — 40 + 12.
+        usage: { promptTokens: 60, completionTokens: 20, totalTokens: 52, contextLimit: 1000 },
       });
     });
 
