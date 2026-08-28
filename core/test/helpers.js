@@ -16,6 +16,7 @@ export function testConfig(overrides = {}) {
     contextWindowTokens: 1000,
     llmProvider: "ollama",
     ollama: { baseUrl: "http://ollama.test", model: "test-model", timeoutMs: 1000 },
+    tools: { binanceBaseUrl: "http://binance.test", timeoutMs: 500 },
     jobs: {
       pollIntervalMs: 10,
       deliveryMaxAttempts: 3,

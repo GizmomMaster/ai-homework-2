@@ -86,6 +86,17 @@ export const config = {
     think: thinkMode("OLLAMA_THINK", false),
   },
 
+  /**
+   * Инструменты сбора рыночных данных. Базовый адрес держится здесь, а не
+   * приходит в параметрах вызова: параметры инструментов формирует языковая
+   * модель, и адрес из них означал бы, что вывод модели решает, к какому
+   * хосту пойдёт сервис.
+   */
+  tools: {
+    binanceBaseUrl: process.env.BINANCE_BASE_URL || "https://api.binance.com",
+    timeoutMs: positiveInt("TOOLS_TIMEOUT_MS", 10000),
+  },
+
   jobs: {
     pollIntervalMs: positiveInt("JOB_POLL_INTERVAL_MS", 500),
     deliveryMaxAttempts: positiveInt("CALLBACK_MAX_ATTEMPTS", 6),
