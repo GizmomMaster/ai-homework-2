@@ -25,6 +25,9 @@
  * Флаги:
  *   --lang=ru|en          язык системного промпта (по умолчанию ru)
  *   --format=schema|json|none   как просим JSON (по умолчанию schema)
+ *   --prompt=v1|v2        v1 — промпт из спецификации дословно (по умолчанию),
+ *                         v2 — он же плюс явное правило про границу
+ *                         TASK_REQUEST / CLARIFICATION_NEEDED
  *   --runs=N              прогонов каждого случая (по умолчанию 1)
  *   --model=…             модель (по умолчанию из .env / OLLAMA_MODEL)
  *   --base-url=…          адрес Ollama (по умолчанию из .env)
@@ -111,6 +114,33 @@ OUTPUT FORMAT (STRICT JSON, no other text):
 Write topicSummary, reasoning, clarificationQuestion and outOfScopeReason in RUSSIAN — they are shown to the user. Keys and intent values stay exactly as written above.`;
 
 /**
+ * Довесок к промпту для `--prompt=v2`.
+ *
+ * Замер на v1 показал, что почти все ошибки обеих моделей лежат на одной
+ * границе — TASK_REQUEST против CLARIFICATION_NEEDED, — причём в обе стороны:
+ * 1.7b уводит задачу с названным тикером в уточнение, 8b тащит запрос без
+ * тикера в задачу. Промпт из спецификации задаёт эту границу примерами, и
+ * модель подгоняет запрос под похожий пример вместо применения критерия.
+ * Здесь критерий назван явно и одной фразой.
+ */
+const RULES_RU = `
+
+УТОЧНЯЮЩИЕ ПРАВИЛА (имеют приоритет над примерами выше):
+* Границу между "TASK_REQUEST" и "CLARIFICATION_NEEDED" определяет ровно одно: назван ли в запросе конкретный актив — тикер, символ пары или название монеты.
+  - Актив назван → "TASK_REQUEST", даже если запрос очень короткий. "Какая цена BTC?" — это "TASK_REQUEST".
+  - Актив не назван и не следует из предыдущих реплик → "CLARIFICATION_NEEDED", даже если в запросе есть глагол действия. "Проверь стакан", "Сравни их за неделю" — это "CLARIFICATION_NEEDED".
+* Глагол действия над данными (сравни, покажи, найди, посмотри, посчитай) вместе с названным активом — это "TASK_REQUEST", а не "THEORY_QUESTION". Теоретический вопрос спрашивает, что это такое или как устроено, а не какие сейчас значения.`;
+
+/** То же по-английски, для `--lang=en --prompt=v2`. */
+const RULES_EN = `
+
+DISAMBIGUATION RULES (these take priority over the examples above):
+* Exactly one thing separates "TASK_REQUEST" from "CLARIFICATION_NEEDED": whether the request names a concrete asset — a ticker, a pair symbol or a coin name.
+  - An asset is named → "TASK_REQUEST", however short the request. "What is the price of BTC?" is a "TASK_REQUEST".
+  - No asset is named and none follows from the previous turns → "CLARIFICATION_NEEDED", even when the request contains an action verb. "Check the order book", "Compare them over the week" are "CLARIFICATION_NEEDED".
+* An action verb over data (compare, show, find, check, calculate) together with a named asset is a "TASK_REQUEST", not a "THEORY_QUESTION". A theory question asks what something is or how it works, not what its current values are.`;
+
+/**
  * Набор случаев. `alsoAcceptable` — категории, которые спека допускает наравне
  * с ожидаемой: по §3.1 и §5.2 отказ по торговым действиям и по недоступным
  * источникам выдаёт Планировщик, то есть Маршрутизатор обязан пропустить их
@@ -155,7 +185,7 @@ const CASES = [
 ];
 
 function parseArgs(argv) {
-  const args = { lang: "ru", format: "schema", runs: 1, verbose: false };
+  const args = { lang: "ru", format: "schema", prompt: "v1", runs: 1, verbose: false };
   for (const arg of argv) {
     const [key, value] = arg.replace(/^--/, "").split("=");
     if (key === "verbose") args.verbose = true;
@@ -167,6 +197,7 @@ function parseArgs(argv) {
   if (!["schema", "json", "none"].includes(args.format)) {
     throw new Error(`--format: ожидается schema, json или none`);
   }
+  if (!["v1", "v2"].includes(args.prompt)) throw new Error(`--prompt: ожидается v1 или v2`);
   if (!Number.isInteger(args.runs) || args.runs < 1) throw new Error(`--runs: целое ≥ 1`);
   if (args.think === "true") args.think = true;
   else if (args.think === "false") args.think = false;
@@ -229,11 +260,14 @@ async function main() {
 
   const format =
     args.format === "schema" ? ROUTER_SCHEMA : args.format === "json" ? "json" : undefined;
-  const systemPrompt = args.lang === "en" ? PROMPT_EN : PROMPT_RU;
+  const basePrompt = args.lang === "en" ? PROMPT_EN : PROMPT_RU;
+  const rules = args.lang === "en" ? RULES_EN : RULES_RU;
+  const systemPrompt = args.prompt === "v2" ? basePrompt + rules : basePrompt;
 
   console.log(
     `Модель: ${model}   Ollama: ${baseUrl}  (${baseUrlSource})\n` +
-      `Промпт: ${args.lang}   format: ${args.format}   think: ${think}   прогонов: ${args.runs}\n` +
+      `Промпт: ${args.lang}/${args.prompt}   format: ${args.format}   ` +
+      `think: ${think}   прогонов: ${args.runs}\n` +
       `Случаев: ${CASES.length}, всего запросов: ${CASES.length * args.runs}\n`,
   );
 
