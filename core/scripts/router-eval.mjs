@@ -25,9 +25,10 @@
  * Флаги:
  *   --lang=ru|en          язык системного промпта (по умолчанию ru)
  *   --format=schema|json|none   как просим JSON (по умолчанию schema)
- *   --prompt=v1|v2        v1 — промпт из спецификации дословно (по умолчанию),
- *                         v2 — он же плюс явное правило про границу
- *                         TASK_REQUEST / CLARIFICATION_NEEDED
+ *   --prompt=v1|v2        v2 — промпт спецификации плюс явное правило про
+ *                         границу TASK_REQUEST / CLARIFICATION_NEEDED
+ *                         (по умолчанию, выиграл по замеру);
+ *                         v1 — промпт из спецификации дословно
  *   --runs=N              прогонов каждого случая (по умолчанию 1)
  *   --model=…             модель (по умолчанию из .env / OLLAMA_MODEL)
  *   --base-url=…          адрес Ollama (по умолчанию из .env)
@@ -191,7 +192,7 @@ function parseArgs(argv) {
   const args = {
     lang: "ru",
     format: "schema",
-    prompt: "v1",
+    prompt: "v2",
     runs: 1,
     temperature: 0,
     verbose: false,
