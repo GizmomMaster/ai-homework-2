@@ -133,9 +133,21 @@ describe("handleReply", () => {
       assert.match(ctx.telegramClient.lastText(), /уточните/i);
     });
 
-    it("оба отказа уходят обычным текстом, без разметки", async (t) => {
+    it("для задачи признаётся, что данных пока нет, и не выдумывает цифр", async (t) => {
       muteConsole(t);
-      for (const reason of ["out_of_scope", "clarification_needed"]) {
+      const ctx = deliver({ status: "rejected", reason: "task_unsupported" });
+
+      await ctx.run();
+
+      const text = ctx.telegramClient.lastText();
+      assert.match(text, /не подключ/i);
+      // Отказ должен уводить туда, где бот полезен, а не просто закрывать дверь.
+      assert.match(text, /теори/i);
+    });
+
+    it("отказы уходят обычным текстом, без разметки", async (t) => {
+      muteConsole(t);
+      for (const reason of ["out_of_scope", "clarification_needed", "task_unsupported"]) {
         const ctx = deliver({ status: "rejected", reason });
         await ctx.run();
         assert.equal(ctx.telegramClient.sent[0].parseMode, undefined, reason);

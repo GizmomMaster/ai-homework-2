@@ -14,6 +14,15 @@ export const REJECT_REASON = {
   outOfScope: "out_of_scope",
   /** Нужно уточнение, но вопрос сформулировать не удалось. */
   clarificationNeeded: "clarification_needed",
+  /**
+   * Задача понята, но сбор данных ещё не подключён (до фазы 4).
+   *
+   * Отвечать на «сравни объёмы SOL и BTC» силами языковой модели нельзя:
+   * рыночных данных у неё нет, а правдоподобные числа она назовёт охотно —
+   * и трейдер примет их за настоящие. Честный отказ здесь строго полезнее
+   * уверенной выдумки.
+   */
+  taskUnsupported: "task_unsupported",
 };
 
 /** Причины отказа задания, не относящиеся к модели. */
@@ -35,14 +44,14 @@ export class DialogService {
    * @param {{
    *   chatRepository: import("../db/chatRepository.js").ChatRepository,
    *   routerAgent: import("../agents/RouterAgent.js").RouterAgent,
-   *   llmRunner: import("../llm/LlmRunner.js").LlmRunner,
+   *   theoryAgent: import("../agents/TheoryAgent.js").TheoryAgent,
    *   contextWindowTokens: number,
    * }} deps
    */
-  constructor({ chatRepository, routerAgent, llmRunner, contextWindowTokens }) {
+  constructor({ chatRepository, routerAgent, theoryAgent, contextWindowTokens }) {
     this.chatRepository = chatRepository;
     this.routerAgent = routerAgent;
-    this.llmRunner = llmRunner;
+    this.theoryAgent = theoryAgent;
     this.contextWindowTokens = contextWindowTokens;
   }
 
@@ -120,17 +129,31 @@ export class DialogService {
       return this.#clarification({ session, text, verdict, spent });
     }
 
-    // THEORY_QUESTION, TASK_REQUEST и разбор, который не удался.
+    if (intent === ROUTER_INTENT.taskRequest) {
+      log(`Задача пока не выполнима: ${verdict.topicSummary}`);
+      return {
+        status: JOB_STATUS.rejected,
+        reason: REJECT_REASON.taskUnsupported,
+        intent,
+        usage: this.#usage(session.totalTokens, spent),
+      };
+    }
+
+    // THEORY_QUESTION и разбор, который не удался: в обоих случаях отвечаем
+    // обычным диалогом — теоретический агент и есть ветка общего назначения.
     const messages = [...history, { role: "user", content: text }];
 
     let result;
     try {
-      result = await this.llmRunner.chat(messages);
+      result = await this.theoryAgent.answer(messages);
     } catch (error) {
       return this.#llmFailure(error);
     }
     add(spent, result);
 
+    // Считается вместе с системным промптом агента, и это верно: в окно
+    // модели он попадает каждый ход наравне с историей, поэтому и место в
+    // бюджете занимает настоящее. Диалоги теперь наполняются чуть быстрее.
     const dialogTokens = result.promptTokens + result.completionTokens;
 
     return {

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { DialogService, FAILURE_REASON, REJECT_REASON } from "../src/domain/DialogService.js";
 import { LLM_ERROR, LlmError } from "../src/llm/LlmRunner.js";
 import {
-  createFakeLlmRunner,
   createFakeRouter,
+  createFakeTheoryAgent,
   createTestRepositories,
   muteConsole,
 } from "./helpers.js";
@@ -12,19 +12,20 @@ import { ROUTER_INTENT } from "../src/agents/RouterAgent.js";
 
 function setup({ reply, verdict, contextWindowTokens = 1000 } = {}) {
   const { chatRepository } = createTestRepositories();
-  const llmRunner = createFakeLlmRunner(reply);
+  const theoryAgent = createFakeTheoryAgent(reply);
   const routerAgent = createFakeRouter(verdict);
   const service = new DialogService({
     chatRepository,
     routerAgent,
-    llmRunner,
+    theoryAgent,
     contextWindowTokens,
   });
   const conversation = chatRepository.getOrCreateConversation("telegram", 8123);
 
   return {
     chatRepository,
-    llmRunner,
+    // Тесты обращаются к нему как к «модели»: агент — тонкая обёртка над ней.
+    llmRunner: theoryAgent,
     routerAgent,
     service,
     conversationId: conversation.id,
@@ -174,16 +175,27 @@ describe("DialogService", () => {
       assert.equal((await ctx.process("какая цена?")).reason, REJECT_REASON.clarificationNeeded);
     });
 
-    it("теория и задача пока обе идут к модели за ответом", async () => {
-      for (const intent of [ROUTER_INTENT.theoryQuestion, ROUTER_INTENT.taskRequest]) {
-        const ctx = setup({ verdict: { intent } });
+    it("теоретический вопрос уходит теоретическому агенту", async () => {
+      const ctx = setup({ verdict: { intent: ROUTER_INTENT.theoryQuestion } });
 
-        const outcome = await ctx.process("вопрос");
+      const outcome = await ctx.process("что такое funding rate?");
 
-        assert.equal(outcome.status, "completed", intent);
-        assert.equal(ctx.llmRunner.calls.length, 1, intent);
-        assert.equal(outcome.intent, intent);
-      }
+      assert.equal(outcome.status, "completed");
+      assert.equal(outcome.intent, ROUTER_INTENT.theoryQuestion);
+      assert.equal(ctx.llmRunner.calls.length, 1);
+    });
+
+    it("задача отклоняется, а не отвечается выдуманными числами", async () => {
+      const ctx = setup({ verdict: { intent: ROUTER_INTENT.taskRequest } });
+
+      const outcome = await ctx.process("сравни объёмы SOL и BTC");
+
+      assert.equal(outcome.status, "rejected");
+      assert.equal(outcome.reason, REJECT_REASON.taskUnsupported);
+      // Главное здесь: модель не спрашивали. Рыночных данных у неё нет, и
+      // правдоподобные цифры в ответе были бы хуже отказа.
+      assert.equal(ctx.llmRunner.calls.length, 0);
+      assert.equal(outcome.historyEntry, undefined);
     });
 
     it("маршрутизатор не видит системных сообщений в истории диалога", async () => {

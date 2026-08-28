@@ -79,6 +79,21 @@ export function createFakeLlmRunner(
 }
 
 /**
+ * Заглушка теоретического агента. Внутри тот же fake-раннер, поэтому тесты
+ * по-прежнему видят, что именно ушло модели, — только через `.calls` агента.
+ */
+export function createFakeTheoryAgent(
+  reply = { content: "ответ", promptTokens: 40, completionTokens: 12 },
+) {
+  const llmRunner = createFakeLlmRunner(reply);
+  return {
+    calls: llmRunner.calls,
+    options: llmRunner.options,
+    answer: (messages) => llmRunner.chat(messages),
+  };
+}
+
+/**
  * Подменённый fetch для доставки callback'ов: копит доставленные полезные
  * нагрузки и умеет падать заданное число раз подряд.
  *
@@ -105,13 +120,20 @@ export function createFakeCallbackTransport({ failTimes = 0, status = 200 } = {}
  * Поднимает Core целиком (БД в памяти, подменённые модель и транспорт
  * callback'ов) и отдаёт `request` поверх настоящего HTTP.
  */
-export async function startCoreApp({ llmRunner, routerAgent, transport, config: overrides } = {}) {
+export async function startCoreApp({
+  llmRunner,
+  routerAgent,
+  theoryAgent,
+  transport,
+  config: overrides,
+} = {}) {
   const config = testConfig(overrides);
   const callbackTransport = transport ?? createFakeCallbackTransport();
   const app = createApp({
     config,
     llmRunner: llmRunner ?? createFakeLlmRunner(),
     routerAgent: routerAgent ?? createFakeRouter(),
+    theoryAgent: theoryAgent ?? createFakeTheoryAgent(),
     fetchImpl: callbackTransport.fetchImpl,
   });
 
