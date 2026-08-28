@@ -95,6 +95,51 @@ export function createFakeTheoryAgent(
 }
 
 /**
+ * Заглушка планировщика. `result` — объект плана, функция от входа или Error.
+ */
+export function createFakePlanner(result = { canExecute: false, fallbackMessage: "не умею" }) {
+  const calls = [];
+  return {
+    calls,
+    async plan(input) {
+      calls.push(input);
+      const value = typeof result === "function" ? result(input) : result;
+      if (value instanceof Error) throw value;
+      return {
+        taskSummary: "задача",
+        plan: [],
+        fallbackMessage: null,
+        truncated: false,
+        usage: { promptTokens: 300, completionTokens: 40 },
+        ...value,
+      };
+    },
+  };
+}
+
+/**
+ * Заглушка исполнителя плана: превращает шаги в результаты по функции
+ * `outcome(step)`; по умолчанию все шаги успешны.
+ */
+export function createFakeExecutor(outcome = () => ({ ok: true, value: { ok: 1 } })) {
+  const calls = [];
+  return {
+    calls,
+    async run(plan) {
+      calls.push(plan);
+      const steps = plan.map((step, index) => ({
+        stepNumber: index + 1,
+        action: step.action ?? step.toolToUse,
+        tool: step.toolToUse,
+        ...outcome(step, index),
+      }));
+      const succeeded = steps.filter((s) => s.ok).length;
+      return { steps, succeeded, failed: steps.length - succeeded };
+    },
+  };
+}
+
+/**
  * Подменённый fetch для доставки callback'ов: копит доставленные полезные
  * нагрузки и умеет падать заданное число раз подряд.
  *
@@ -125,6 +170,9 @@ export async function startCoreApp({
   llmRunner,
   routerAgent,
   theoryAgent,
+  plannerAgent,
+  planExecutor,
+  tools,
   transport,
   config: overrides,
 } = {}) {
@@ -135,6 +183,9 @@ export async function startCoreApp({
     llmRunner: llmRunner ?? createFakeLlmRunner(),
     routerAgent: routerAgent ?? createFakeRouter(),
     theoryAgent: theoryAgent ?? createFakeTheoryAgent(),
+    plannerAgent: plannerAgent ?? createFakePlanner(),
+    planExecutor: planExecutor ?? createFakeExecutor(),
+    tools,
     fetchImpl: callbackTransport.fetchImpl,
   });
 

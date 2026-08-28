@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { DialogService, FAILURE_REASON, REJECT_REASON } from "../src/domain/DialogService.js";
 import { LLM_ERROR, LlmError } from "../src/llm/LlmRunner.js";
 import {
+  createFakeExecutor,
+  createFakePlanner,
   createFakeRouter,
   createFakeTheoryAgent,
   createTestRepositories,
@@ -10,14 +12,18 @@ import {
 } from "./helpers.js";
 import { ROUTER_INTENT } from "../src/agents/RouterAgent.js";
 
-function setup({ reply, verdict, contextWindowTokens = 1000 } = {}) {
+function setup({ reply, verdict, plan, execution, contextWindowTokens = 1000 } = {}) {
   const { chatRepository } = createTestRepositories();
   const theoryAgent = createFakeTheoryAgent(reply);
   const routerAgent = createFakeRouter(verdict);
+  const plannerAgent = createFakePlanner(plan);
+  const planExecutor = createFakeExecutor(execution);
   const service = new DialogService({
     chatRepository,
     routerAgent,
     theoryAgent,
+    plannerAgent,
+    planExecutor,
     contextWindowTokens,
   });
   const conversation = chatRepository.getOrCreateConversation("telegram", 8123);
@@ -27,6 +33,8 @@ function setup({ reply, verdict, contextWindowTokens = 1000 } = {}) {
     // Тесты обращаются к нему как к «модели»: агент — тонкая обёртка над ней.
     llmRunner: theoryAgent,
     routerAgent,
+    plannerAgent,
+    planExecutor,
     service,
     conversationId: conversation.id,
     process: (text) => service.process({ conversationId: conversation.id, text }),
@@ -185,17 +193,18 @@ describe("DialogService", () => {
       assert.equal(ctx.llmRunner.calls.length, 1);
     });
 
-    it("задача отклоняется, а не отвечается выдуманными числами", async () => {
-      const ctx = setup({ verdict: { intent: ROUTER_INTENT.taskRequest } });
+    it("задача уходит планировщику, а не теоретическому агенту", async () => {
+      const ctx = setup({
+        verdict: { intent: ROUTER_INTENT.taskRequest },
+        plan: { canExecute: true, plan: [{ action: "Цена BTC", toolToUse: "t" }] },
+      });
 
-      const outcome = await ctx.process("сравни объёмы SOL и BTC");
+      const outcome = await ctx.process("какая цена BTC?");
 
-      assert.equal(outcome.status, "rejected");
-      assert.equal(outcome.reason, REJECT_REASON.taskUnsupported);
-      // Главное здесь: модель не спрашивали. Рыночных данных у неё нет, и
-      // правдоподобные цифры в ответе были бы хуже отказа.
+      assert.equal(outcome.status, "completed");
+      assert.equal(ctx.plannerAgent.calls.length, 1);
+      // Теоретический агент не должен придумывать рыночные данные.
       assert.equal(ctx.llmRunner.calls.length, 0);
-      assert.equal(outcome.historyEntry, undefined);
     });
 
     it("маршрутизатор не видит системных сообщений в истории диалога", async () => {
@@ -209,6 +218,139 @@ describe("DialogService", () => {
         "user",
         "assistant",
       ]);
+    });
+  });
+
+  describe("ветка задачи", () => {
+    const onePlan = { canExecute: true, taskSummary: "Цена BTC", plan: [{ action: "Цена", toolToUse: "get_crypto_current_price", parameters: { symbol: "BTCUSDT" } }] };
+
+    function task(options) {
+      const ctx = setup({ verdict: { intent: ROUTER_INTENT.taskRequest }, ...options });
+      return ctx;
+    }
+
+    it("выполнимый план исполняется, отчёт уходит пользователю", async () => {
+      const ctx = task({ plan: onePlan, execution: () => ({ ok: true, value: { price: 79363.81 } }) });
+
+      const outcome = await ctx.process("цена BTC?");
+
+      assert.equal(outcome.status, "completed");
+      assert.match(outcome.replyText, /Цена BTC/);
+      assert.match(outcome.replyText, /79 363\.81/);
+      assert.equal(ctx.planExecutor.calls[0], onePlan.plan);
+    });
+
+    it("отчёт попадает в историю — следующий вопрос опирается на показанное", async () => {
+      const ctx = task({ plan: onePlan });
+
+      const outcome = await ctx.process("цена BTC?");
+      ctx.commit(outcome);
+
+      const messages = ctx.chatRepository.getMessages(outcome.historyEntry.sessionId);
+      assert.deepEqual(messages.map((m) => m.role), ["user", "assistant"]);
+      assert.equal(messages[0].content, "цена BTC?");
+    });
+
+    it("невыполнимая задача: объяснение планировщика уходит как ответ", async () => {
+      const ctx = task({
+        plan: { canExecute: false, fallbackMessage: "Торговые операции не поддерживаются." },
+      });
+
+      const outcome = await ctx.process("купи 1 BTC");
+
+      assert.equal(outcome.status, "completed");
+      assert.equal(outcome.replyText, "Торговые операции не поддерживаются.");
+      assert.equal(ctx.planExecutor.calls.length, 0);
+    });
+
+    it("невыполнимая задача без объяснения: код для адаптера", async () => {
+      const ctx = task({ plan: { canExecute: false, fallbackMessage: null } });
+
+      const outcome = await ctx.process("купи 1 BTC");
+
+      assert.equal(outcome.status, "rejected");
+      assert.equal(outcome.reason, REJECT_REASON.taskUnsupported);
+    });
+
+    it("пустой план считается невыполнимой задачей", async () => {
+      const ctx = task({ plan: { canExecute: true, plan: [], fallbackMessage: "нечего делать" } });
+
+      const outcome = await ctx.process("сделай что-нибудь");
+
+      assert.equal(outcome.replyText, "нечего делать");
+      assert.equal(ctx.planExecutor.calls.length, 0);
+    });
+
+    it("часть шагов упала — отчёт собирается из удавшихся с оговоркой", async () => {
+      const ctx = task({
+        plan: {
+          canExecute: true,
+          taskSummary: "Сравнение",
+          plan: [
+            { action: "Объём BTC", toolToUse: "t" },
+            { action: "Объём NOSUCH", toolToUse: "t" },
+          ],
+        },
+        execution: (step) =>
+          step.action === "Объём BTC"
+            ? { ok: true, value: { quoteVolume: 1000 } }
+            : { ok: false, error: { code: "unknown_symbol" } },
+      });
+
+      const outcome = await ctx.process("сравни");
+
+      assert.equal(outcome.status, "completed");
+      assert.match(outcome.replyText, /Объём BTC/);
+      assert.match(outcome.replyText, /не знает такой торговой пары/);
+      assert.match(outcome.replyText, /Данные неполные/);
+    });
+
+    it("все шаги упали — это отказ, а не пустой отчёт", async () => {
+      const ctx = task({
+        plan: onePlan,
+        execution: () => ({ ok: false, error: { code: "rate_limited" } }),
+      });
+
+      const outcome = await ctx.process("цена BTC?");
+
+      assert.equal(outcome.status, "failed");
+      assert.equal(outcome.reason, "rate_limited");
+      assert.equal(outcome.historyEntry, undefined);
+    });
+
+    it("обрезанный план отмечается в отчёте", async () => {
+      const ctx = task({ plan: { ...onePlan, truncated: true } });
+
+      assert.match((await ctx.process("много всего")).replyText, /План был длиннее/);
+    });
+
+    it("токены планировщика попадают в стоимость задания", async () => {
+      const ctx = task({ plan: onePlan });
+
+      const outcome = await ctx.process("цена BTC?");
+
+      // Маршрутизатор-заглушка тратит 20 + 8, планировщик — 300 + 40.
+      assert.equal(outcome.usage.promptTokens, 320);
+      assert.equal(outcome.usage.completionTokens, 48);
+    });
+
+    it("отказ планировщика роняет задание: отвечать нечем", async () => {
+      const ctx = task({ plan: new LlmError(LLM_ERROR.timeout, "долго") });
+
+      const outcome = await ctx.process("цена BTC?");
+
+      assert.equal(outcome.status, "failed");
+      assert.equal(outcome.reason, LLM_ERROR.timeout);
+    });
+
+    it("планировщик видит историю диалога", async () => {
+      const ctx = task({ plan: onePlan });
+
+      const first = await ctx.process("цена BTC?");
+      ctx.commit(first);
+      await ctx.process("а ETH?");
+
+      assert.equal(ctx.plannerAgent.calls.at(-1).history.length, 2);
     });
   });
 

@@ -2,6 +2,7 @@ import { JOB_STATUS } from "../db/jobRepository.js";
 import { LLM_ERROR } from "../llm/LlmRunner.js";
 import { ROUTER_INTENT } from "../agents/RouterAgent.js";
 import { logError, log } from "../logger.js";
+import { renderReport } from "./renderReport.js";
 
 /**
  * Причины отказа, не являющиеся ошибкой. Наружу уходит только код: как это
@@ -15,12 +16,8 @@ export const REJECT_REASON = {
   /** Нужно уточнение, но вопрос сформулировать не удалось. */
   clarificationNeeded: "clarification_needed",
   /**
-   * Задача понята, но сбор данных ещё не подключён (до фазы 4).
-   *
-   * Отвечать на «сравни объёмы SOL и BTC» силами языковой модели нельзя:
-   * рыночных данных у неё нет, а правдоподобные числа она назовёт охотно —
-   * и трейдер примет их за настоящие. Честный отказ здесь строго полезнее
-   * уверенной выдумки.
+   * Задача понята, но выполнить её имеющимися инструментами нельзя, а своими
+   * словами планировщик объяснить не смог. Формулировку напишет адаптер.
    */
   taskUnsupported: "task_unsupported",
 };
@@ -45,13 +42,24 @@ export class DialogService {
    *   chatRepository: import("../db/chatRepository.js").ChatRepository,
    *   routerAgent: import("../agents/RouterAgent.js").RouterAgent,
    *   theoryAgent: import("../agents/TheoryAgent.js").TheoryAgent,
+   *   plannerAgent: import("../agents/PlannerAgent.js").PlannerAgent,
+   *   planExecutor: import("./PlanExecutor.js").PlanExecutor,
    *   contextWindowTokens: number,
    * }} deps
    */
-  constructor({ chatRepository, routerAgent, theoryAgent, contextWindowTokens }) {
+  constructor({
+    chatRepository,
+    routerAgent,
+    theoryAgent,
+    plannerAgent,
+    planExecutor,
+    contextWindowTokens,
+  }) {
     this.chatRepository = chatRepository;
     this.routerAgent = routerAgent;
     this.theoryAgent = theoryAgent;
+    this.plannerAgent = plannerAgent;
+    this.planExecutor = planExecutor;
     this.contextWindowTokens = contextWindowTokens;
   }
 
@@ -130,13 +138,7 @@ export class DialogService {
     }
 
     if (intent === ROUTER_INTENT.taskRequest) {
-      log(`Задача пока не выполнима: ${verdict.topicSummary}`);
-      return {
-        status: JOB_STATUS.rejected,
-        reason: REJECT_REASON.taskUnsupported,
-        intent,
-        usage: this.#usage(session.totalTokens, spent),
-      };
+      return this.#task({ session, history, text, spent });
     }
 
     // THEORY_QUESTION и разбор, который не удался: в обоих случаях отвечаем
@@ -195,15 +197,86 @@ export class DialogService {
       };
     }
 
+    return this.#reply({ session, text, replyText: question, spent, intent: verdict.intent });
+  }
+
+  /**
+   * Задача: построить план, выполнить его и собрать отчёт.
+   *
+   * Отчёт — содержание ответа, поэтому уходит адаптеру обычной репликой и
+   * попадает в историю: следующий вопрос «а что по ETH» должен опираться на
+   * то, что уже показано.
+   */
+  async #task({ session, history, text, spent }) {
+    let plan;
+    try {
+      plan = await this.plannerAgent.plan({ history, text });
+      add(spent, plan.usage);
+    } catch (error) {
+      // В отличие от маршрутизатора, отвечать без планировщика нечем:
+      // выдумать рыночные данные — единственное, что осталось бы модели.
+      return this.#llmFailure(error);
+    }
+
+    if (!plan.canExecute || plan.plan.length === 0) {
+      log(`Задача невыполнима: ${plan.taskSummary}`);
+      const message = plan.fallbackMessage?.trim();
+      // Планировщик объясняет отказ своими словами — он один знает, чего
+      // именно не хватило. Без объяснения отдаём код, текст напишет адаптер.
+      return message
+        ? this.#reply({ session, text, replyText: message, spent, intent: ROUTER_INTENT.taskRequest })
+        : {
+            status: JOB_STATUS.rejected,
+            reason: REJECT_REASON.taskUnsupported,
+            intent: ROUTER_INTENT.taskRequest,
+            usage: this.#usage(session.totalTokens, spent),
+          };
+    }
+
+    const execution = await this.planExecutor.run(plan.plan);
+
+    if (execution.succeeded === 0) {
+      // Ни один шаг не удался: показывать пустой отчёт с перечнем причин
+      // бессмысленно, это отказ.
+      return {
+        status: JOB_STATUS.failed,
+        reason: execution.steps[0]?.error?.code ?? FAILURE_REASON.internal,
+        intent: ROUTER_INTENT.taskRequest,
+        usage: this.#usage(session.totalTokens, spent),
+      };
+    }
+
+    const replyText = renderReport({
+      taskSummary: plan.taskSummary,
+      steps: execution.steps,
+      truncated: plan.truncated,
+    });
+
+    return this.#reply({
+      session,
+      text,
+      replyText,
+      spent,
+      intent: ROUTER_INTENT.taskRequest,
+    });
+  }
+
+  /**
+   * Ответ, который не измерялся моделью: отчёт и объяснение планировщика
+   * собираются у нас, поэтому размер диалога остаётся прежним до следующего
+   * обращения к модели за текстом — оно посчитает всё разом.
+   */
+  #reply({ session, text, replyText, spent, intent }) {
+    const totalTokens = session.totalTokens;
     return {
       status: JOB_STATUS.completed,
-      replyText: question,
-      intent: verdict.intent,
-      usage,
+      replyText,
+      intent,
+      usage: this.#usage(totalTokens, spent),
       historyEntry: {
         sessionId: session.id,
         userText: text,
-        assistantText: question,
+        assistantText: replyText,
         totalTokens,
       },
     };

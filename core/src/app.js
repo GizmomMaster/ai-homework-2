@@ -5,6 +5,10 @@ import { createLlmRunner } from "./llm/index.js";
 import { DialogService } from "./domain/DialogService.js";
 import { RouterAgent } from "./agents/RouterAgent.js";
 import { TheoryAgent } from "./agents/TheoryAgent.js";
+import { PlannerAgent } from "./agents/PlannerAgent.js";
+import { PlanExecutor } from "./domain/PlanExecutor.js";
+import { BinanceClient } from "./tools/BinanceClient.js";
+import { createTools } from "./tools/index.js";
 import { CallbackDelivery } from "./jobs/CallbackDelivery.js";
 import { JobRunner } from "./jobs/JobRunner.js";
 import { createHandlers } from "./http/handlers.js";
@@ -21,19 +25,45 @@ import { createServer } from "./http/server.js";
  *   llmRunner?: import("./llm/LlmRunner.js").LlmRunner,
  *   routerAgent?: import("./agents/RouterAgent.js").RouterAgent,
  *   theoryAgent?: import("./agents/TheoryAgent.js").TheoryAgent,
+ *   plannerAgent?: import("./agents/PlannerAgent.js").PlannerAgent,
+ *   planExecutor?: import("./domain/PlanExecutor.js").PlanExecutor,
+ *   tools?: ReturnType<typeof import("./tools/index.js").createTools>,
  *   fetchImpl?: typeof fetch,
  * }} params
  */
-export function createApp({ config, llmRunner, routerAgent, theoryAgent, fetchImpl }) {
+export function createApp({
+  config,
+  llmRunner,
+  routerAgent,
+  theoryAgent,
+  plannerAgent,
+  planExecutor,
+  tools,
+  fetchImpl,
+}) {
   const db = createDatabase(config.sqlitePath);
   const chatRepository = new ChatRepository(db);
   const jobRepository = new JobRepository(db);
 
   const runner = llmRunner ?? createLlmRunner(config);
+  // Свой fetch, а не общий с доставкой callback'ов: это разные направления
+  // и разные подмены в тестах — заглушка адаптера ждёт тело запроса, которого
+  // у GET к бирже нет.
+  const marketTools =
+    tools ??
+    createTools({
+      binance: new BinanceClient({
+        baseUrl: config.tools.binanceBaseUrl,
+        timeoutMs: config.tools.timeoutMs,
+      }),
+    });
+
   const dialogService = new DialogService({
     chatRepository,
     routerAgent: routerAgent ?? new RouterAgent({ llmRunner: runner }),
     theoryAgent: theoryAgent ?? new TheoryAgent({ llmRunner: runner }),
+    plannerAgent: plannerAgent ?? new PlannerAgent({ llmRunner: runner, tools: marketTools }),
+    planExecutor: planExecutor ?? new PlanExecutor({ tools: marketTools }),
     contextWindowTokens: config.contextWindowTokens,
   });
 

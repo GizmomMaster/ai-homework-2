@@ -133,16 +133,16 @@ describe("handleReply", () => {
       assert.match(ctx.telegramClient.lastText(), /уточните/i);
     });
 
-    it("для задачи признаётся, что данных пока нет, и не выдумывает цифр", async (t) => {
+    it("для невыполнимой задачи перечисляет, что доступно", async (t) => {
       muteConsole(t);
       const ctx = deliver({ status: "rejected", reason: "task_unsupported" });
 
       await ctx.run();
 
       const text = ctx.telegramClient.lastText();
-      assert.match(text, /не подключ/i);
-      // Отказ должен уводить туда, где бот полезен, а не просто закрывать дверь.
-      assert.match(text, /теори/i);
+      assert.match(text, /не могу/i);
+      // Отказ должен показывать, где бот полезен, а не просто закрывать дверь.
+      assert.match(text, /котировки|объём/i);
     });
 
     it("отказы уходят обычным текстом, без разметки", async (t) => {
