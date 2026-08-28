@@ -20,6 +20,23 @@ function positiveInt(name, defaultValue) {
 }
 
 /**
+ * Режим «размышления» гибридных reasoning-моделей (Qwen3 и подобных).
+ * Значение "omit" убирает поле из запроса: модели без поддержки размышления
+ * отвергают запрос, в котором оно есть.
+ */
+function thinkMode(name, defaultValue) {
+  const raw = process.env[name];
+  if (!raw) return defaultValue;
+
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  if (raw === "omit") return "omit";
+  throw new Error(
+    `Переменная окружения ${name} должна быть "true", "false" или "omit", получено: "${raw}".`,
+  );
+}
+
+/**
  * Относительные пути к БД разрешаются от корня сервиса, а не от текущего
  * рабочего каталога: иначе запуск из другого места молча создал бы вторую
  * пустую базу.
@@ -52,13 +69,20 @@ export const config = {
   authToken: process.env.CORE_AUTH_TOKEN || undefined,
 
   sqlitePath: resolveFromProjectRoot(process.env.SQLITE_DB_PATH || "./data/core.db"),
-  contextWindowTokens: positiveInt("CONTEXT_WINDOW_TOKENS", 50000),
+  /**
+   * Бюджет диалога в токенах. Держится заметно ниже нативного окна модели
+   * (у qwen3:1.7b — 32768): у моделей такого размера связность рассыпается
+   * задолго до формального лимита, и честный отказ с предложением начать
+   * новый диалог полезнее медленной деградации.
+   */
+  contextWindowTokens: positiveInt("CONTEXT_WINDOW_TOKENS", 8000),
 
   llmProvider: process.env.LLM_PROVIDER || "ollama",
   ollama: {
     baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
-    model: process.env.OLLAMA_MODEL || "llama3",
-    timeoutMs: positiveInt("OLLAMA_TIMEOUT_MS", 300000),
+    model: process.env.OLLAMA_MODEL || "qwen3:1.7b",
+    timeoutMs: positiveInt("OLLAMA_TIMEOUT_MS", 60000),
+    think: thinkMode("OLLAMA_THINK", false),
   },
 
   jobs: {

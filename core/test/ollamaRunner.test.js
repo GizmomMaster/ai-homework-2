@@ -87,6 +87,59 @@ describe("OllamaRunner", () => {
       assert.equal(ollama.requests[0].payload.options, undefined);
     });
 
+    it("передаёт системное сообщение вместе с историей", async () => {
+      const runner = await connect();
+      const withSystem = [
+        { role: "system", content: "ты маршрутизатор" },
+        { role: "user", content: "привет" },
+      ];
+
+      await runner.chat(withSystem);
+
+      assert.deepEqual(ollama.requests[0].payload.messages, withSystem);
+    });
+
+    it("передаёт JSON Schema в поле format", async () => {
+      const runner = await connect();
+      const schema = { type: "object", properties: { intent: { type: "string" } } };
+
+      await runner.chat(messages, { format: schema });
+
+      assert.deepEqual(ollama.requests[0].payload.format, schema);
+    });
+
+    it("не передаёт format, когда он не запрошен", async () => {
+      const runner = await connect();
+
+      await runner.chat(messages);
+
+      assert.equal(ollama.requests[0].payload.format, undefined);
+    });
+
+    it("по умолчанию отключает размышление", async () => {
+      const runner = await connect();
+
+      await runner.chat(messages);
+
+      assert.equal(ollama.requests[0].payload.think, false);
+    });
+
+    it("вызов может переопределить режим размышления", async () => {
+      const runner = await connect();
+
+      await runner.chat(messages, { think: true });
+
+      assert.equal(ollama.requests[0].payload.think, true);
+    });
+
+    it("при think=omit поле не отправляется совсем", async () => {
+      const runner = await connect(() => ({}), { think: "omit" });
+
+      await runner.chat(messages);
+
+      assert.equal("think" in ollama.requests[0].payload, false);
+    });
+
     it("не дублирует слэш в базовом URL", async () => {
       ollama = await startFakeOllama(() => ({}));
       const runner = new OllamaRunner({ baseUrl: `${ollama.baseUrl}///`, model: "test-model" });
@@ -117,6 +170,55 @@ describe("OllamaRunner", () => {
         content: "ответ",
         promptTokens: 0,
         completionTokens: 0,
+      });
+    });
+  });
+
+  describe("блок размышления", () => {
+    it("вырезается из ответа модели", async () => {
+      const runner = await connect(() => ({
+        json: {
+          message: { role: "assistant", content: "<think>прикидываю</think>\n\nОтвет" },
+          eval_count: 40,
+        },
+      }));
+
+      assert.equal((await runner.chat(messages)).content, "Ответ");
+    });
+
+    it("вырезается и незакрытый блок при обрыве генерации", async () => {
+      const runner = await connect(() => ({
+        json: { message: { role: "assistant", content: "Ответ\n<think>не дописал" } },
+      }));
+
+      assert.equal((await runner.chat(messages)).content, "Ответ");
+    });
+
+    it("ответ целиком из размышления → код llm_bad_response", async () => {
+      const runner = await connect(() => ({
+        json: { message: { role: "assistant", content: "<think>только думал</think>" } },
+      }));
+
+      await assert.rejects(() => runner.chat(messages), (error) => {
+        assert.equal(error.code, LLM_ERROR.badResponse);
+        assert.match(error.message, /пустой ответ/);
+        return true;
+      });
+    });
+
+    it("счётчики токенов не теряются при вырезании", async () => {
+      const runner = await connect(() => ({
+        json: {
+          message: { role: "assistant", content: "<think>ага</think>Ответ" },
+          prompt_eval_count: 11,
+          eval_count: 22,
+        },
+      }));
+
+      assert.deepEqual(await runner.chat(messages), {
+        content: "Ответ",
+        promptTokens: 11,
+        completionTokens: 22,
       });
     });
   });
