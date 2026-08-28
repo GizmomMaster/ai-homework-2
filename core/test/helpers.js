@@ -16,6 +16,7 @@ export function testConfig(overrides = {}) {
     contextWindowTokens: 1000,
     llmProvider: "ollama",
     ollama: { baseUrl: "http://ollama.test", model: "test-model", timeoutMs: 1000 },
+    tools: { binanceBaseUrl: "http://binance.test", timeoutMs: 500 },
     jobs: {
       pollIntervalMs: 10,
       deliveryMaxAttempts: 3,
@@ -34,19 +35,124 @@ export function createTestRepositories() {
 }
 
 /**
+ * Заглушка маршрутизатора. `verdict` — объект вердикта, функция от входа
+ * или Error.
+ */
+export function createFakeRouter(verdict = { intent: "THEORY_QUESTION" }) {
+  const calls = [];
+  return {
+    calls,
+    async classify(input) {
+      calls.push(input);
+      const result = typeof verdict === "function" ? verdict(input) : verdict;
+      if (result instanceof Error) throw result;
+      return {
+        isCryptoRelated: true,
+        confidence: 0.9,
+        topicSummary: "тема",
+        usage: { promptTokens: 20, completionTokens: 8 },
+        ...result,
+      };
+    },
+  };
+}
+
+/**
  * Заглушка LlmRunner. `reply` — объект ответа, функция от messages или Error.
  */
 export function createFakeLlmRunner(
   reply = { content: "ответ", promptTokens: 10, completionTokens: 5 },
 ) {
   const calls = [];
+  const options = [];
   return {
     calls,
-    async chat(messages) {
+    /** Опции вызова параллельным массивом: дописывать их в `calls` нельзя — тесты сравнивают его целиком. */
+    options,
+    async chat(messages, callOptions) {
       calls.push(messages);
+      options.push(callOptions);
       const result = typeof reply === "function" ? reply(messages) : reply;
       if (result instanceof Error) throw result;
       return result;
+    },
+  };
+}
+
+/**
+ * Заглушка теоретического агента. Внутри тот же fake-раннер, поэтому тесты
+ * по-прежнему видят, что именно ушло модели, — только через `.calls` агента.
+ */
+export function createFakeTheoryAgent(
+  reply = { content: "ответ", promptTokens: 40, completionTokens: 12 },
+) {
+  const llmRunner = createFakeLlmRunner(reply);
+  return {
+    calls: llmRunner.calls,
+    options: llmRunner.options,
+    answer: (messages) => llmRunner.chat(messages),
+  };
+}
+
+/**
+ * Заглушка планировщика. `result` — объект плана, функция от входа или Error.
+ */
+export function createFakePlanner(result = { canExecute: false, fallbackMessage: "не умею" }) {
+  const calls = [];
+  return {
+    calls,
+    async plan(input) {
+      calls.push(input);
+      const value = typeof result === "function" ? result(input) : result;
+      if (value instanceof Error) throw value;
+      return {
+        taskSummary: "задача",
+        plan: [],
+        fallbackMessage: null,
+        truncated: false,
+        usage: { promptTokens: 300, completionTokens: 40 },
+        ...value,
+      };
+    },
+  };
+}
+
+/**
+ * Заглушка исполнителя плана: превращает шаги в результаты по функции
+ * `outcome(step)`; по умолчанию все шаги успешны.
+ */
+export function createFakeExecutor(outcome = () => ({ ok: true, value: { ok: 1 } })) {
+  const calls = [];
+  return {
+    calls,
+    async run(plan) {
+      calls.push(plan);
+      const steps = plan.map((step, index) => ({
+        stepNumber: index + 1,
+        action: step.action ?? step.toolToUse,
+        tool: step.toolToUse,
+        ...outcome(step, index),
+      }));
+      const succeeded = steps.filter((s) => s.ok).length;
+      return { steps, succeeded, failed: steps.length - succeeded };
+    },
+  };
+}
+
+/**
+ * Заглушка сводящего агента. `reply` — ответ модели, функция от входа или Error.
+ */
+export function createFakeSummaryAgent(
+  reply = { content: "Сводка по данным.", promptTokens: 500, completionTokens: 60 },
+) {
+  const calls = [];
+  return {
+    calls,
+    async summarize(input) {
+      calls.push(input);
+      const value = typeof reply === "function" ? reply(input) : reply;
+      if (value instanceof Error) throw value;
+      return value;
     },
   };
 }
@@ -78,12 +184,28 @@ export function createFakeCallbackTransport({ failTimes = 0, status = 200 } = {}
  * Поднимает Core целиком (БД в памяти, подменённые модель и транспорт
  * callback'ов) и отдаёт `request` поверх настоящего HTTP.
  */
-export async function startCoreApp({ llmRunner, transport, config: overrides } = {}) {
+export async function startCoreApp({
+  llmRunner,
+  routerAgent,
+  theoryAgent,
+  plannerAgent,
+  planExecutor,
+  summaryAgent,
+  tools,
+  transport,
+  config: overrides,
+} = {}) {
   const config = testConfig(overrides);
   const callbackTransport = transport ?? createFakeCallbackTransport();
   const app = createApp({
     config,
     llmRunner: llmRunner ?? createFakeLlmRunner(),
+    routerAgent: routerAgent ?? createFakeRouter(),
+    theoryAgent: theoryAgent ?? createFakeTheoryAgent(),
+    plannerAgent: plannerAgent ?? createFakePlanner(),
+    planExecutor: planExecutor ?? createFakeExecutor(),
+    summaryAgent: summaryAgent ?? createFakeSummaryAgent(),
+    tools,
     fetchImpl: callbackTransport.fetchImpl,
   });
 

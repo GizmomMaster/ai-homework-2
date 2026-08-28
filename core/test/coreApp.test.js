@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { LLM_ERROR, LlmError } from "../src/llm/LlmRunner.js";
 import {
   createFakeCallbackTransport,
-  createFakeLlmRunner,
+  createFakeTheoryAgent,
   muteConsole,
   startCoreApp,
   waitFor,
@@ -29,7 +29,7 @@ describe("Core целиком", () => {
     it("принимает сообщение и доставляет ответ адаптеру callback'ом", async (t) => {
       muteConsole(t);
       core = await startCoreApp({
-        llmRunner: createFakeLlmRunner({
+        theoryAgent: createFakeTheoryAgent({
           content: "ответ модели",
           promptTokens: 40,
           completionTokens: 12,
@@ -47,7 +47,8 @@ describe("Core целиком", () => {
         externalId: "8123",
         status: "completed",
         reply: { text: "ответ модели" },
-        usage: { promptTokens: 40, completionTokens: 12, totalTokens: 52, contextLimit: 1000 },
+        // Маршрутизатор-заглушка тратит 20 + 8, отвечающий вызов — 40 + 12.
+        usage: { promptTokens: 60, completionTokens: 20, totalTokens: 52, contextLimit: 1000 },
       });
     });
 
@@ -75,15 +76,15 @@ describe("Core целиком", () => {
 
     it("сохраняет обмен в историю и учитывает его в следующем запросе", async (t) => {
       muteConsole(t);
-      const llmRunner = createFakeLlmRunner();
-      core = await startCoreApp({ llmRunner });
+      const theoryAgent = createFakeTheoryAgent();
+      core = await startCoreApp({ theoryAgent });
 
       await core.request("POST", messagesPath, { body: message("первый") });
       await waitFor(() => core.delivered.length === 1, { label: "первый ответ" });
       await core.request("POST", messagesPath, { body: message("второй") });
       await waitFor(() => core.delivered.length === 2, { label: "второй ответ" });
 
-      assert.deepEqual(llmRunner.calls[1], [
+      assert.deepEqual(theoryAgent.calls[1], [
         { role: "user", content: "первый" },
         { role: "assistant", content: "ответ" },
         { role: "user", content: "второй" },
@@ -92,8 +93,8 @@ describe("Core целиком", () => {
 
     it("повтор ключа идемпотентности не порождает второй запрос к модели", async (t) => {
       muteConsole(t);
-      const llmRunner = createFakeLlmRunner();
-      core = await startCoreApp({ llmRunner });
+      const theoryAgent = createFakeTheoryAgent();
+      core = await startCoreApp({ theoryAgent });
       const body = message("привет", "tg:8123:fixed");
 
       const first = await core.request("POST", messagesPath, { body });
@@ -102,15 +103,15 @@ describe("Core целиком", () => {
 
       assert.equal(second.status, 200);
       assert.equal(second.json.jobId, first.json.jobId);
-      assert.equal(llmRunner.calls.length, 1, "модель опрошена один раз");
+      assert.equal(theoryAgent.calls.length, 1, "модель опрошена один раз");
     });
   });
 
   describe("сброс контекста", () => {
     it("после reset история не подмешивается в запрос", async (t) => {
       muteConsole(t);
-      const llmRunner = createFakeLlmRunner();
-      core = await startCoreApp({ llmRunner });
+      const theoryAgent = createFakeTheoryAgent();
+      core = await startCoreApp({ theoryAgent });
 
       await core.request("POST", messagesPath, { body: message("первый") });
       await waitFor(() => core.delivered.length === 1, { label: "первый ответ" });
@@ -122,7 +123,7 @@ describe("Core целиком", () => {
       await core.request("POST", messagesPath, { body: message("после сброса") });
       await waitFor(() => core.delivered.length === 2, { label: "ответ после сброса" });
 
-      assert.deepEqual(llmRunner.calls.at(-1), [{ role: "user", content: "после сброса" }]);
+      assert.deepEqual(theoryAgent.calls.at(-1), [{ role: "user", content: "после сброса" }]);
     });
   });
 
@@ -130,7 +131,7 @@ describe("Core целиком", () => {
     it("при заполненном контексте доставляет rejected с причиной", async (t) => {
       muteConsole(t);
       core = await startCoreApp({
-        llmRunner: createFakeLlmRunner({
+        theoryAgent: createFakeTheoryAgent({
           content: "ответ",
           promptTokens: 30,
           completionTokens: 20,
@@ -153,7 +154,7 @@ describe("Core целиком", () => {
     it("при недоступной модели доставляет failed с кодом причины", async (t) => {
       muteConsole(t);
       core = await startCoreApp({
-        llmRunner: createFakeLlmRunner(new LlmError(LLM_ERROR.timeout, "слишком долго")),
+        theoryAgent: createFakeTheoryAgent(new LlmError(LLM_ERROR.timeout, "слишком долго")),
       });
 
       await core.request("POST", messagesPath, { body: message("привет") });
@@ -166,7 +167,7 @@ describe("Core целиком", () => {
     it("текст внутренней ошибки модели не утекает адаптеру", async (t) => {
       muteConsole(t);
       core = await startCoreApp({
-        llmRunner: createFakeLlmRunner(
+        theoryAgent: createFakeTheoryAgent(
           new LlmError(LLM_ERROR.unavailable, "connection refused 10.0.0.5:11434"),
         ),
       });
@@ -179,25 +180,25 @@ describe("Core целиком", () => {
 
     it("неудачный запрос не оставляет следа в контексте", async (t) => {
       muteConsole(t);
-      const llmRunner = {
+      const theoryAgent = {
         calls: [],
         shouldFail: true,
-        async chat(messages) {
+        async answer(messages) {
           this.calls.push(messages);
           if (this.shouldFail) throw new LlmError(LLM_ERROR.unavailable, "нет связи");
           return { content: "ответ", promptTokens: 10, completionTokens: 5 };
         },
       };
-      core = await startCoreApp({ llmRunner });
+      core = await startCoreApp({ theoryAgent });
 
       await core.request("POST", messagesPath, { body: message("упавший") });
       await waitFor(() => core.delivered.length === 1, { label: "ошибка доставлена" });
 
-      llmRunner.shouldFail = false;
+      theoryAgent.shouldFail = false;
       await core.request("POST", messagesPath, { body: message("новый") });
       await waitFor(() => core.delivered.length === 2, { label: "успешный ответ" });
 
-      assert.deepEqual(llmRunner.calls.at(-1), [{ role: "user", content: "новый" }]);
+      assert.deepEqual(theoryAgent.calls.at(-1), [{ role: "user", content: "новый" }]);
     });
   });
 

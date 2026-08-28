@@ -6,18 +6,19 @@ import { DialogService } from "../src/domain/DialogService.js";
 import { JOB_STATUS } from "../src/db/jobRepository.js";
 import {
   createFakeCallbackTransport,
-  createFakeLlmRunner,
+  createFakeRouter,
+  createFakeTheoryAgent,
   createTestRepositories,
   muteConsole,
   waitFor,
-} from "./helpers.js";
+ } from "./helpers.js";
 
 /**
  * Собирает JobRunner поверх общей БД. В отличие от тестов приложения целиком,
  * здесь важно пережить «перезапуск»: репозитории и БД остаются те же, а
  * раннер создаётся заново — как после падения процесса.
  */
-function buildEnv({ llmRunner, transport, jobRepositoryOverrides } = {}) {
+function buildEnv({ theoryAgent, transport, jobRepositoryOverrides } = {}) {
   const { db, chatRepository, jobRepository } = createTestRepositories();
   const conversation = chatRepository.getOrCreateConversation("telegram", "8123");
   const callbackTransport = transport ?? createFakeCallbackTransport();
@@ -30,7 +31,8 @@ function buildEnv({ llmRunner, transport, jobRepositoryOverrides } = {}) {
       jobRepository: runnerJobs,
       dialogService: new DialogService({
         chatRepository,
-        llmRunner: llmRunner ?? createFakeLlmRunner(),
+        routerAgent: createFakeRouter(),
+        theoryAgent: theoryAgent ?? createFakeTheoryAgent(),
         contextWindowTokens: 1000,
       }),
       callbackDelivery: new CallbackDelivery({
@@ -99,12 +101,12 @@ describe("JobRunner", () => {
 
     it("обрабатывает задания по очереди в порядке поступления", async (t) => {
       muteConsole(t);
-      const llmRunner = createFakeLlmRunner((messages) => ({
+      const theoryAgent = createFakeTheoryAgent((messages) => ({
         content: `эхо: ${messages.at(-1).content}`,
         promptTokens: 1,
         completionTokens: 1,
       }));
-      const env = buildEnv({ llmRunner });
+      const env = buildEnv({ theoryAgent });
       env.enqueue("первый", "tg:8123:1");
       env.enqueue("второй", "tg:8123:2");
 
@@ -134,8 +136,8 @@ describe("JobRunner", () => {
 
     it("не переспрашивает модель для уже завершённого задания", async (t) => {
       muteConsole(t);
-      const llmRunner = createFakeLlmRunner();
-      const env = buildEnv({ llmRunner });
+      const theoryAgent = createFakeTheoryAgent();
+      const env = buildEnv({ theoryAgent });
       const job = env.enqueue();
       // Ответ получен и сохранён, но доставить его не успели.
       env.jobRepository.finish(job.id, { status: JOB_STATUS.completed, replyText: "готовый ответ" });
@@ -143,7 +145,7 @@ describe("JobRunner", () => {
       runUntil(t, env);
       await waitFor(() => env.delivered.length === 1, { label: "ответ дослан" });
 
-      assert.equal(llmRunner.calls.length, 0, "модель не опрашивалась повторно");
+      assert.equal(theoryAgent.calls.length, 0, "модель не опрашивалась повторно");
       assert.equal(env.delivered[0].payload.reply.text, "готовый ответ");
     });
 
@@ -206,8 +208,8 @@ describe("JobRunner", () => {
 
     it("после остановки новые задания не берутся", async (t) => {
       muteConsole(t);
-      const llmRunner = createFakeLlmRunner();
-      const env = buildEnv({ llmRunner });
+      const theoryAgent = createFakeTheoryAgent();
+      const env = buildEnv({ theoryAgent });
       const runner = env.makeRunner();
       runner.start();
       await runner.stop();
@@ -215,7 +217,7 @@ describe("JobRunner", () => {
       env.enqueue("после остановки");
       await new Promise((resolve) => setTimeout(resolve, 60));
 
-      assert.equal(llmRunner.calls.length, 0);
+      assert.equal(theoryAgent.calls.length, 0);
     });
   });
 });

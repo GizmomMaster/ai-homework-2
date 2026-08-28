@@ -110,6 +110,51 @@ describe("handleReply", () => {
     });
   });
 
+  describe("отказ по скоупу", () => {
+    it("объясняет, чем система занимается, и не предлагает /new", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "rejected", reason: "out_of_scope" });
+
+      await ctx.run();
+
+      const text = ctx.telegramClient.lastText();
+      assert.match(text, /криптотрейдер/i);
+      // Новый диалог тут ни при чём: контекст не переполнен, запрос просто
+      // не наш — предложение сбросить историю сбивало бы с толку.
+      assert.doesNotMatch(text, /\/new/);
+    });
+
+    it("просит уточнить, когда модель не сформулировала вопрос сама", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "rejected", reason: "clarification_needed" });
+
+      await ctx.run();
+
+      assert.match(ctx.telegramClient.lastText(), /уточните/i);
+    });
+
+    it("для невыполнимой задачи перечисляет, что доступно", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "rejected", reason: "task_unsupported" });
+
+      await ctx.run();
+
+      const text = ctx.telegramClient.lastText();
+      assert.match(text, /не могу/i);
+      // Отказ должен показывать, где бот полезен, а не просто закрывать дверь.
+      assert.match(text, /котировки|объём/i);
+    });
+
+    it("отказы уходят обычным текстом, без разметки", async (t) => {
+      muteConsole(t);
+      for (const reason of ["out_of_scope", "clarification_needed", "task_unsupported"]) {
+        const ctx = deliver({ status: "rejected", reason });
+        await ctx.run();
+        assert.equal(ctx.telegramClient.sent[0].parseMode, undefined, reason);
+      }
+    });
+  });
+
   describe("ошибки модели", () => {
     it("для таймаута объясняет, что модель не успела", async (t) => {
       muteConsole(t);

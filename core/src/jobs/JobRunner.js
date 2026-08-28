@@ -127,7 +127,9 @@ export class JobRunner {
     if (outcome.status === "completed") {
       log(
         `[job ${job.id}] Готово за ${took} мс ` +
-          `(контекст: ${outcome.usage.totalTokens}/${outcome.usage.contextLimit} токенов).`,
+          `(${outcome.intent ?? "без интента"}, ` +
+          `модель: ${outcome.usage.promptTokens ?? 0}+${outcome.usage.completionTokens ?? 0} токенов, ` +
+          `контекст: ${outcome.usage.totalTokens}/${outcome.usage.contextLimit}).`,
       );
     } else {
       log(`[job ${job.id}] Завершено за ${took} мс со статусом ${outcome.status}: ${outcome.reason}.`);
