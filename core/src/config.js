@@ -70,18 +70,19 @@ export const config = {
 
   sqlitePath: resolveFromProjectRoot(process.env.SQLITE_DB_PATH || "./data/core.db"),
   /**
-   * Бюджет диалога в токенах. Держится заметно ниже нативного окна модели
-   * (у qwen3:1.7b — 32768): у моделей такого размера связность рассыпается
-   * задолго до формального лимита, и честный отказ с предложением начать
-   * новый диалог полезнее медленной деградации.
+   * Бюджет диалога в токенах. Передаётся модели как num_ctx, поэтому упирается
+   * не только в нативное окно модели (у qwen3:8b — 32768), но и в память:
+   * KV-кеш у неё около 144 КиБ на токен, то есть 16000 токенов стоят ~2.3 ГБ
+   * поверх ~5 ГБ весов. Полные 32768 добавили бы ещё столько же и на карте с
+   * 12 ГБ шли бы впритык.
    */
-  contextWindowTokens: positiveInt("CONTEXT_WINDOW_TOKENS", 8000),
+  contextWindowTokens: positiveInt("CONTEXT_WINDOW_TOKENS", 16000),
 
   llmProvider: process.env.LLM_PROVIDER || "ollama",
   ollama: {
     baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
-    model: process.env.OLLAMA_MODEL || "qwen3:1.7b",
-    timeoutMs: positiveInt("OLLAMA_TIMEOUT_MS", 60000),
+    model: process.env.OLLAMA_MODEL || "qwen3:8b",
+    timeoutMs: positiveInt("OLLAMA_TIMEOUT_MS", 120000),
     think: thinkMode("OLLAMA_THINK", false),
   },
 
