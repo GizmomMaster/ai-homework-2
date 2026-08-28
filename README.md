@@ -30,8 +30,32 @@ Telegram ──► telegram-bot ──POST /v1/.../messages──► Core ──
 
 - Node.js 18+ (для запуска без Docker) либо Docker с Compose.
 - Установленная и запущенная [Ollama](https://ollama.com) со скачанной моделью:
-  `ollama pull llama3`.
+  `ollama pull qwen3:1.7b`. Имя модели должно совпадать с `OLLAMA_MODEL`
+  в `core/.env`.
 - Токен бота от [@BotFather](https://t.me/BotFather).
+
+### Видеокарта AMD
+
+Ollama считает на GPU только через ROCm, а официально в ROCm входят не все
+карты RDNA2: например, у RX 6700 XT ядро `gfx1031`, поддерживается же `gfx1030`.
+Без подсказки Ollama молча уходит считать на процессор. Проверить, что
+происходит, — `ollama ps`: в колонке PROCESSOR будет `100% GPU` или `100% CPU`.
+Если оказалось CPU, скажите ROCm считать карту за `gfx1030`:
+
+```bash
+sudo systemctl edit ollama.service
+```
+
+```ini
+[Service]
+Environment="HSA_OVERRIDE_GFX_VERSION=10.3.0"
+```
+
+```bash
+sudo systemctl restart ollama
+```
+
+Подмена нужна только семейству gfx103x; на других картах она сделает хуже.
 
 ## Запуск в Docker (рекомендуется)
 
@@ -139,4 +163,9 @@ cd telegram-bot && npm test
   быть запущена с `OLLAMA_HOST=0.0.0.0`.
 - **Контекст не доходит до лимита.** Core передаёт модели `num_ctx`, равный
   `CONTEXT_WINDOW_TOKENS`. Большое значение требует много оперативной памяти;
-  если модель не тянет, уменьшите его.
+  если модель не тянет, уменьшите его. Значение выше нативного окна модели
+  (`ollama show <модель>`, строка `context length`) бессмысленно: модель на нём
+  не обучалась и связного ответа не даст.
+- **Модель отвечает, но ерундой, и в ответе виден блок `<think>`.** Так ведут
+  себя reasoning-модели вроде Qwen3. Core такие блоки вырезает; если они всё же
+  доходят, проверьте `OLLAMA_THINK` в `core/.env`.
