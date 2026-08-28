@@ -226,9 +226,15 @@ Copy-Item .env.example .env   # впишите TELEGRAM_BOT_TOKEN
 npm start                     # зависимостей нет, install не нужен
 ```
 
-При локальном запуске поправьте адреса в `.env`: у адаптера
-`CORE_BASE_URL=http://localhost:8080`, у Core
-`ADAPTER_TELEGRAM_CALLBACK_URL=http://localhost:8081/callbacks/replies`.
+При локальном запуске поправьте адреса в `.env` — значения по умолчанию
+рассчитаны на compose-сеть:
+
+- у адаптера `CORE_BASE_URL=http://localhost:8080`;
+- у Core `ADAPTER_TELEGRAM_CALLBACK_URL=http://localhost:8081/callbacks/replies`;
+- у Core `OLLAMA_BASE_URL=http://localhost:11434` — **не**
+  `host.docker.internal`. Это имя резолвится только изнутри контейнера; если
+  оставить его при локальном запуске, Core не найдёт модель и сообщит
+  «Не удалось подключиться к Ollama».
 
 ## Перенос истории из старой версии
 
@@ -280,9 +286,18 @@ npm test
 - **«Сервис временно недоступен».** Адаптер не достучался до Core: проверьте
   `CORE_BASE_URL` и что контейнер `core` запущен и здоров (`docker compose ps`).
 - **Core отвечает 401.** Не совпадают значения `CORE_AUTH_TOKEN` в двух `.env`.
-- **«Не удалось подключиться к Ollama».** `OLLAMA_BASE_URL` должен указывать на
-  `host.docker.internal` (не `localhost`) при запуске в Docker, а сама Ollama —
-  быть запущена с `OLLAMA_HOST=0.0.0.0`.
+- **«Не удалось подключиться к Ollama».** Адрес в `OLLAMA_BASE_URL` зависит от
+  того, где запущен **Core**, а не Ollama — та в обоих случаях живёт на хосте.
+  - Core в контейнере → `http://host.docker.internal:11434`, и Ollama должна
+    слушать не только localhost (`OLLAMA_HOST=0.0.0.0`, см. шаг 3). Проверить,
+    на чём она висит: `netstat -ano | findstr 11434` на Windows,
+    `ss -ltn | grep 11434` на Linux — нужен `0.0.0.0`, а не `127.0.0.1`.
+  - Core запущен локально через `npm start` → `http://localhost:11434`.
+    `host.docker.internal` вне контейнера не резолвится, и запрос падает
+    с `fetch failed`.
+
+  Отвечает ли Ollama вообще: `curl.exe http://localhost:11434/api/tags`
+  (в PowerShell — `Invoke-RestMethod http://localhost:11434/api/tags`).
 - **Контекст не доходит до лимита.** Core передаёт модели `num_ctx`, равный
   `CONTEXT_WINDOW_TOKENS`. Большое значение требует много оперативной памяти;
   если модель не тянет, уменьшите его. Значение выше нативного окна модели
