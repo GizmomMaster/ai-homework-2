@@ -7,6 +7,7 @@ import { RouterAgent } from "./agents/RouterAgent.js";
 import { TheoryAgent } from "./agents/TheoryAgent.js";
 import { PlannerAgent } from "./agents/PlannerAgent.js";
 import { PlanExecutor } from "./domain/PlanExecutor.js";
+import { SummaryAgent } from "./agents/SummaryAgent.js";
 import { BinanceClient } from "./tools/BinanceClient.js";
 import { createTools } from "./tools/index.js";
 import { CallbackDelivery } from "./jobs/CallbackDelivery.js";
@@ -27,6 +28,7 @@ import { createServer } from "./http/server.js";
  *   theoryAgent?: import("./agents/TheoryAgent.js").TheoryAgent,
  *   plannerAgent?: import("./agents/PlannerAgent.js").PlannerAgent,
  *   planExecutor?: import("./domain/PlanExecutor.js").PlanExecutor,
+ *   summaryAgent?: import("./agents/SummaryAgent.js").SummaryAgent,
  *   tools?: ReturnType<typeof import("./tools/index.js").createTools>,
  *   fetchImpl?: typeof fetch,
  * }} params
@@ -38,6 +40,7 @@ export function createApp({
   theoryAgent,
   plannerAgent,
   planExecutor,
+  summaryAgent,
   tools,
   fetchImpl,
 }) {
@@ -64,6 +67,7 @@ export function createApp({
     theoryAgent: theoryAgent ?? new TheoryAgent({ llmRunner: runner }),
     plannerAgent: plannerAgent ?? new PlannerAgent({ llmRunner: runner, tools: marketTools }),
     planExecutor: planExecutor ?? new PlanExecutor({ tools: marketTools }),
+    summaryAgent: summaryAgent ?? new SummaryAgent({ llmRunner: runner }),
     contextWindowTokens: config.contextWindowTokens,
   });
 

@@ -140,6 +140,24 @@ export function createFakeExecutor(outcome = () => ({ ok: true, value: { ok: 1 }
 }
 
 /**
+ * Заглушка сводящего агента. `reply` — ответ модели, функция от входа или Error.
+ */
+export function createFakeSummaryAgent(
+  reply = { content: "Сводка по данным.", promptTokens: 500, completionTokens: 60 },
+) {
+  const calls = [];
+  return {
+    calls,
+    async summarize(input) {
+      calls.push(input);
+      const value = typeof reply === "function" ? reply(input) : reply;
+      if (value instanceof Error) throw value;
+      return value;
+    },
+  };
+}
+
+/**
  * Подменённый fetch для доставки callback'ов: копит доставленные полезные
  * нагрузки и умеет падать заданное число раз подряд.
  *
@@ -172,6 +190,7 @@ export async function startCoreApp({
   theoryAgent,
   plannerAgent,
   planExecutor,
+  summaryAgent,
   tools,
   transport,
   config: overrides,
@@ -185,6 +204,7 @@ export async function startCoreApp({
     theoryAgent: theoryAgent ?? createFakeTheoryAgent(),
     plannerAgent: plannerAgent ?? createFakePlanner(),
     planExecutor: planExecutor ?? createFakeExecutor(),
+    summaryAgent: summaryAgent ?? createFakeSummaryAgent(),
     tools,
     fetchImpl: callbackTransport.fetchImpl,
   });

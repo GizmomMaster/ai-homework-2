@@ -44,6 +44,7 @@ export class DialogService {
    *   theoryAgent: import("../agents/TheoryAgent.js").TheoryAgent,
    *   plannerAgent: import("../agents/PlannerAgent.js").PlannerAgent,
    *   planExecutor: import("./PlanExecutor.js").PlanExecutor,
+   *   summaryAgent: import("../agents/SummaryAgent.js").SummaryAgent,
    *   contextWindowTokens: number,
    * }} deps
    */
@@ -53,6 +54,7 @@ export class DialogService {
     theoryAgent,
     plannerAgent,
     planExecutor,
+    summaryAgent,
     contextWindowTokens,
   }) {
     this.chatRepository = chatRepository;
@@ -60,6 +62,7 @@ export class DialogService {
     this.theoryAgent = theoryAgent;
     this.plannerAgent = plannerAgent;
     this.planExecutor = planExecutor;
+    this.summaryAgent = summaryAgent;
     this.contextWindowTokens = contextWindowTokens;
   }
 
@@ -119,6 +122,7 @@ export class DialogService {
     }
 
     const intent = verdict?.intent;
+    if (intent) log(`Интент: ${intent} (уверенность ${verdict.confidence}) — ${verdict.topicSummary}`);
 
     if (intent === ROUTER_INTENT.outOfScope) {
       log(`Запрос вне компетенции: ${verdict.topicSummary}`);
@@ -246,11 +250,7 @@ export class DialogService {
       };
     }
 
-    const replyText = renderReport({
-      taskSummary: plan.taskSummary,
-      steps: execution.steps,
-      truncated: plan.truncated,
-    });
+    const replyText = await this.#report({ text, plan, execution, spent });
 
     return this.#reply({
       session,
@@ -259,6 +259,40 @@ export class DialogService {
       spent,
       intent: ROUTER_INTENT.taskRequest,
     });
+  }
+
+  /**
+   * Отчёт по собранным данным.
+   *
+   * Сводит модель — шаблон не сделает вывода и не ответит на заданный вопрос.
+   * Но если модель на этом шаге откажет, задание не роняем: данные уже
+   * получены и оплачены запросами к бирже, и показать их шаблоном куда лучше,
+   * чем потерять всё из-за сбоя на последнем шаге.
+   */
+  async #report({ text, plan, execution, spent }) {
+    const fallback = () =>
+      renderReport({
+        taskSummary: plan.taskSummary,
+        steps: execution.steps,
+        truncated: plan.truncated,
+      });
+
+    if (!this.summaryAgent) return fallback();
+
+    try {
+      const summary = await this.summaryAgent.summarize({
+        question: text,
+        taskSummary: plan.taskSummary,
+        steps: execution.steps,
+      });
+      add(spent, summary);
+      const content = summary.content.trim();
+      if (!content) throw new Error("пустая сводка");
+      return plan.truncated ? `${content}\n\n_План был длиннее и выполнен частично._` : content;
+    } catch (error) {
+      logError("Не удалось свести отчёт, показываем данные как есть:", error);
+      return fallback();
+    }
   }
 
   /**

@@ -5,6 +5,7 @@ import { LLM_ERROR, LlmError } from "../src/llm/LlmRunner.js";
 import {
   createFakeExecutor,
   createFakePlanner,
+  createFakeSummaryAgent,
   createFakeRouter,
   createFakeTheoryAgent,
   createTestRepositories,
@@ -12,18 +13,20 @@ import {
 } from "./helpers.js";
 import { ROUTER_INTENT } from "../src/agents/RouterAgent.js";
 
-function setup({ reply, verdict, plan, execution, contextWindowTokens = 1000 } = {}) {
+function setup({ reply, verdict, plan, execution, summary, contextWindowTokens = 1000 } = {}) {
   const { chatRepository } = createTestRepositories();
   const theoryAgent = createFakeTheoryAgent(reply);
   const routerAgent = createFakeRouter(verdict);
   const plannerAgent = createFakePlanner(plan);
   const planExecutor = createFakeExecutor(execution);
+  const summaryAgent = summary === null ? undefined : createFakeSummaryAgent(summary);
   const service = new DialogService({
     chatRepository,
     routerAgent,
     theoryAgent,
     plannerAgent,
     planExecutor,
+    summaryAgent,
     contextWindowTokens,
   });
   const conversation = chatRepository.getOrCreateConversation("telegram", 8123);
@@ -35,6 +38,7 @@ function setup({ reply, verdict, plan, execution, contextWindowTokens = 1000 } =
     routerAgent,
     plannerAgent,
     planExecutor,
+    summaryAgent,
     service,
     conversationId: conversation.id,
     process: (text) => service.process({ conversationId: conversation.id, text }),
@@ -229,15 +233,66 @@ describe("DialogService", () => {
       return ctx;
     }
 
-    it("выполнимый план исполняется, отчёт уходит пользователю", async () => {
-      const ctx = task({ plan: onePlan, execution: () => ({ ok: true, value: { price: 79363.81 } }) });
+    it("выполнимый план исполняется, отчёт сводит модель", async () => {
+      const ctx = task({
+        plan: onePlan,
+        execution: () => ({ ok: true, value: { price: 79363.81 } }),
+        summary: { content: "Биткоин стоит 79 363.81 USDT.", promptTokens: 500, completionTokens: 60 },
+      });
 
       const outcome = await ctx.process("цена BTC?");
 
       assert.equal(outcome.status, "completed");
-      assert.match(outcome.replyText, /Цена BTC/);
-      assert.match(outcome.replyText, /79 363\.81/);
+      assert.equal(outcome.replyText, "Биткоин стоит 79 363.81 USDT.");
       assert.equal(ctx.planExecutor.calls[0], onePlan.plan);
+    });
+
+    it("сводящему агенту достаются вопрос, задача и результаты шагов", async () => {
+      const ctx = task({ plan: onePlan, execution: () => ({ ok: true, value: { price: 1 } }) });
+
+      await ctx.process("цена BTC?");
+
+      const brief = ctx.summaryAgent.calls[0];
+      assert.equal(brief.question, "цена BTC?");
+      assert.equal(brief.taskSummary, "Цена BTC");
+      assert.equal(brief.steps.length, 1);
+    });
+
+    it("отказ сводящего агента не теряет уже собранные данные", async (t) => {
+      muteConsole(t);
+      // Запросы к бирже уже сделаны: показать числа шаблоном лучше, чем
+      // потерять всё из-за сбоя на последнем шаге.
+      const ctx = task({
+        plan: onePlan,
+        execution: () => ({ ok: true, value: { price: 79363.81 } }),
+        summary: new LlmError(LLM_ERROR.timeout, "долго"),
+      });
+
+      const outcome = await ctx.process("цена BTC?");
+
+      assert.equal(outcome.status, "completed");
+      assert.match(outcome.replyText, /79 363\.81/);
+    });
+
+    it("пустая сводка тоже откатывается на шаблон", async (t) => {
+      muteConsole(t);
+      const ctx = task({
+        plan: onePlan,
+        execution: () => ({ ok: true, value: { price: 79363.81 } }),
+        summary: { content: "   ", promptTokens: 10, completionTokens: 1 },
+      });
+
+      assert.match((await ctx.process("цена BTC?")).replyText, /79 363\.81/);
+    });
+
+    it("токены сводки попадают в стоимость задания", async () => {
+      const ctx = task({ plan: onePlan });
+
+      const outcome = await ctx.process("цена BTC?");
+
+      // Маршрутизатор 20+8, планировщик 300+40, сводка 500+60.
+      assert.equal(outcome.usage.promptTokens, 820);
+      assert.equal(outcome.usage.completionTokens, 108);
     });
 
     it("отчёт попадает в историю — следующий вопрос опирается на показанное", async () => {
@@ -300,9 +355,22 @@ describe("DialogService", () => {
       const outcome = await ctx.process("сравни");
 
       assert.equal(outcome.status, "completed");
-      assert.match(outcome.replyText, /Объём BTC/);
-      assert.match(outcome.replyText, /не знает такой торговой пары/);
-      assert.match(outcome.replyText, /Данные неполные/);
+      // Модель должна знать, чего не хватило, иначе оговорки в отчёте не будет.
+      const brief = ctx.summaryAgent.calls[0];
+      assert.equal(brief.steps.filter((s) => !s.ok).length, 1);
+    });
+
+    it("без сводящего агента отчёт собирается шаблоном", async () => {
+      const ctx = task({
+        plan: { canExecute: true, taskSummary: "Сравнение", plan: [{ action: "Объём BTC", toolToUse: "t" }] },
+        execution: () => ({ ok: true, value: { quoteVolume: 1000 } }),
+        summary: null,
+      });
+
+      const outcome = await ctx.process("сравни");
+
+      assert.match(outcome.replyText, /\*\*Сравнение\*\*/);
+      assert.match(outcome.replyText, /объём, USDT: 1 000/);
     });
 
     it("все шаги упали — это отказ, а не пустой отчёт", async () => {
@@ -318,20 +386,10 @@ describe("DialogService", () => {
       assert.equal(outcome.historyEntry, undefined);
     });
 
-    it("обрезанный план отмечается в отчёте", async () => {
+    it("обрезка плана отмечается и поверх сводки модели", async () => {
       const ctx = task({ plan: { ...onePlan, truncated: true } });
 
-      assert.match((await ctx.process("много всего")).replyText, /План был длиннее/);
-    });
-
-    it("токены планировщика попадают в стоимость задания", async () => {
-      const ctx = task({ plan: onePlan });
-
-      const outcome = await ctx.process("цена BTC?");
-
-      // Маршрутизатор-заглушка тратит 20 + 8, планировщик — 300 + 40.
-      assert.equal(outcome.usage.promptTokens, 320);
-      assert.equal(outcome.usage.completionTokens, 48);
+      assert.match((await ctx.process("много")).replyText, /План был длиннее/);
     });
 
     it("отказ планировщика роняет задание: отвечать нечем", async () => {
