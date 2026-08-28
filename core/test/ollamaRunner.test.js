@@ -79,6 +79,30 @@ describe("OllamaRunner", () => {
       assert.deepEqual(ollama.requests[0].payload.options, { num_ctx: 50000 });
     });
 
+    it("передаёт температуру в options", async () => {
+      const runner = await connect(() => ({}), { numCtx: 4096 });
+
+      await runner.chat(messages, { temperature: 0 });
+
+      assert.deepEqual(ollama.requests[0].payload.options, { num_ctx: 4096, temperature: 0 });
+    });
+
+    it("температура работает и без размера контекста", async () => {
+      const runner = await connect();
+
+      await runner.chat(messages, { temperature: 0.7 });
+
+      assert.deepEqual(ollama.requests[0].payload.options, { temperature: 0.7 });
+    });
+
+    it("без температуры настройка модели не трогается", async () => {
+      const runner = await connect(() => ({}), { numCtx: 4096 });
+
+      await runner.chat(messages);
+
+      assert.equal("temperature" in ollama.requests[0].payload.options, false);
+    });
+
     it("не передаёт options без размера контекста", async () => {
       const runner = await connect();
 

@@ -32,6 +32,9 @@
  *   --model=…             модель (по умолчанию из .env / OLLAMA_MODEL)
  *   --base-url=…          адрес Ollama (по умолчанию из .env)
  *   --think=false|true|omit     режим размышления (по умолчанию из .env)
+ *   --temperature=N       температура сэмплирования (по умолчанию 0 — от
+ *                         классификатора нужен воспроизводимый ответ, а не
+ *                         выборка из распределения)
  *   --verbose             печатать сырой ответ модели по каждому промаху
  */
 import { config } from "../src/config.js";
@@ -185,11 +188,19 @@ const CASES = [
 ];
 
 function parseArgs(argv) {
-  const args = { lang: "ru", format: "schema", prompt: "v1", runs: 1, verbose: false };
+  const args = {
+    lang: "ru",
+    format: "schema",
+    prompt: "v1",
+    runs: 1,
+    temperature: 0,
+    verbose: false,
+  };
   for (const arg of argv) {
     const [key, value] = arg.replace(/^--/, "").split("=");
     if (key === "verbose") args.verbose = true;
     else if (key === "runs") args.runs = Number(value);
+    else if (key === "temperature") args.temperature = Number(value);
     else if (key === "base-url") args.baseUrl = value;
     else args[key] = value;
   }
@@ -199,6 +210,9 @@ function parseArgs(argv) {
   }
   if (!["v1", "v2"].includes(args.prompt)) throw new Error(`--prompt: ожидается v1 или v2`);
   if (!Number.isInteger(args.runs) || args.runs < 1) throw new Error(`--runs: целое ≥ 1`);
+  if (!Number.isFinite(args.temperature) || args.temperature < 0) {
+    throw new Error(`--temperature: неотрицательное число`);
+  }
   if (args.think === "true") args.think = true;
   else if (args.think === "false") args.think = false;
   return args;
@@ -267,7 +281,7 @@ async function main() {
   console.log(
     `Модель: ${model}   Ollama: ${baseUrl}  (${baseUrlSource})\n` +
       `Промпт: ${args.lang}/${args.prompt}   format: ${args.format}   ` +
-      `think: ${think}   прогонов: ${args.runs}\n` +
+      `think: ${think}   t°: ${args.temperature}   прогонов: ${args.runs}\n` +
       `Случаев: ${CASES.length}, всего запросов: ${CASES.length * args.runs}\n`,
   );
 
@@ -302,7 +316,7 @@ async function main() {
             { role: "system", content: systemPrompt },
             { role: "user", content: testCase.text },
           ],
-          { format },
+          { format, temperature: args.temperature },
         );
         content = result.content;
         stats.completionTokens.push(result.completionTokens);

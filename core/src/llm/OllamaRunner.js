@@ -48,7 +48,14 @@ export class OllamaRunner {
    * @param {ChatOptions} [options]
    * @returns {Promise<ChatResult>}
    */
-  async chat(messages, { format, think = this.think } = {}) {
+  async chat(messages, { format, think = this.think, temperature } = {}) {
+    // Ollama складывает настройки генерации в один объект options; собираем
+    // его из того, что задано, чтобы не отправлять пустой.
+    const options = {
+      ...(this.numCtx ? { num_ctx: this.numCtx } : {}),
+      ...(temperature === undefined ? {} : { temperature }),
+    };
+
     let response;
     try {
       response = await fetch(`${this.baseUrl}/api/chat`, {
@@ -68,7 +75,7 @@ export class OllamaRunner {
           // (часто заметно меньше нашего лимита) и молча обрезает старые
           // сообщения истории — счётчик токенов тогда не растёт до лимита,
           // а колеблется. Задаём num_ctx = наш лимит.
-          ...(this.numCtx ? { options: { num_ctx: this.numCtx } } : {}),
+          ...(Object.keys(options).length > 0 ? { options } : {}),
         }),
         // Без таймаута зависший запрос держал бы задание в работе бессрочно.
         signal: this.timeoutMs ? AbortSignal.timeout(this.timeoutMs) : undefined,
