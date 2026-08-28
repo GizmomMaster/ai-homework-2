@@ -12,6 +12,11 @@
  * поведение модели. Повтор при невалидном JSON — уже часть боевого кода, и
  * добавлять его надо после того, как станет известна база.
  *
+ * Core для этого запускать не нужно — скрипт обращается к Ollama напрямую.
+ * Но настройки он берёт те же, из core/.env, поэтому при запуске в обход
+ * контейнера следите за OLLAMA_BASE_URL: host.docker.internal резолвится
+ * только изнутри контейнера, снаружи нужен localhost (или --base-url).
+ *
  * Запуск:
  *   node scripts/router-eval.mjs
  *   node scripts/router-eval.mjs --lang=en --format=schema
@@ -203,6 +208,14 @@ async function main() {
   const model = args.model ?? config.ollama.model;
   const baseUrl = args.baseUrl ?? config.ollama.baseUrl;
   const think = args.think ?? config.ollama.think;
+  // Скрипт читает те же настройки, что и Core, поэтому адрес может приехать из
+  // core/.env — например `host.docker.internal`, годный только внутри
+  // контейнера. Показываем источник, чтобы не гадать, откуда взялся адрес.
+  const baseUrlSource = args.baseUrl
+    ? "флаг --base-url"
+    : process.env.OLLAMA_BASE_URL
+      ? "OLLAMA_BASE_URL из core/.env"
+      : "значение по умолчанию";
 
   const runner = new OllamaRunner({
     baseUrl,
@@ -219,7 +232,7 @@ async function main() {
   const systemPrompt = args.lang === "en" ? PROMPT_EN : PROMPT_RU;
 
   console.log(
-    `Модель: ${model}   Ollama: ${baseUrl}\n` +
+    `Модель: ${model}   Ollama: ${baseUrl}  (${baseUrlSource})\n` +
       `Промпт: ${args.lang}   format: ${args.format}   think: ${think}   прогонов: ${args.runs}\n` +
       `Случаев: ${CASES.length}, всего запросов: ${CASES.length * args.runs}\n`,
   );
@@ -262,7 +275,14 @@ async function main() {
       } catch (error) {
         // Недоступная Ollama — не результат замера, а неверная настройка:
         // перебирать ради неё оставшиеся случаи бессмысленно.
-        if (error.code === LLM_ERROR.unavailable) throw error;
+        if (error.code === LLM_ERROR.unavailable) {
+          throw new Error(
+            `${error.message}\n\n` +
+              `Адрес взят: ${baseUrlSource}. Имя host.docker.internal работает только\n` +
+              `изнутри контейнера — скрипт запускается напрямую, поэтому нужен localhost.\n` +
+              `Переопределить, не трогая .env: --base-url=http://localhost:11434`,
+          );
+        }
         outcomes.push(`ОШИБКА: ${error.code ?? error.name}`);
         if (args.verbose) console.log(`    ${error.message}`);
         continue;
