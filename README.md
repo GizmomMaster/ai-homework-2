@@ -30,8 +30,10 @@ Telegram ──► telegram-bot ──POST /v1/.../messages──► Core ──
 
 - Node.js 18+ (для запуска без Docker) либо Docker с Compose.
 - Установленная и запущенная [Ollama](https://ollama.com) со скачанной моделью:
-  `ollama pull qwen3:1.7b`. Имя модели должно совпадать с `OLLAMA_MODEL`
-  в `core/.env`.
+  `ollama pull qwen3:8b` (около 5 ГБ). Имя модели должно совпадать с
+  `OLLAMA_MODEL` в `core/.env`. Модель на 8B рассчитана на видеокарту: на
+  голом процессоре она поедет, но каждый ответ займёт минуты — тогда берите
+  `qwen3:4b` или `qwen3:1.7b` и не забудьте уменьшить `CONTEXT_WINDOW_TOKENS`.
 - Токен бота от [@BotFather](https://t.me/BotFather).
 
 ### Видеокарта AMD
