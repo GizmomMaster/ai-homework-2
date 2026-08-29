@@ -42,6 +42,12 @@ export const config = {
     // на входящих callback'ах. Не задан — проверка выключена.
     authToken: process.env.CORE_AUTH_TOKEN || undefined,
     timeoutMs: positiveInt("CORE_TIMEOUT_MS", 10000),
+    /**
+     * Исключение из правила выше: обзор рынка для /start Core собирает прямо
+     * в запросе — модели там нет, но есть поход в два внешних API, и на
+     * холодном кеше это секунды, а не миллисекунды.
+     */
+    overviewTimeoutMs: positiveInt("CORE_OVERVIEW_TIMEOUT_MS", 30000),
     // Core отвечает сразу, не дожидаясь модели, поэтому долгих ожиданий тут
     // нет — повторы нужны только на случай, что Core ещё поднимается.
     retries: positiveInt("CORE_RETRIES", 3),

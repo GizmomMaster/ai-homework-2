@@ -12,12 +12,41 @@ import { log } from "../logger.js";
  *   jobRepository: import("../db/jobRepository.js").JobRepository,
  *   dialogService: import("../domain/DialogService.js").DialogService,
  *   jobRunner: import("../jobs/JobRunner.js").JobRunner,
+ *   marketOverviewService: import("../domain/MarketOverviewService.js").MarketOverviewService,
  * }} deps
  */
-export function createHandlers({ chatRepository, jobRepository, dialogService, jobRunner }) {
+export function createHandlers({
+  chatRepository,
+  jobRepository,
+  dialogService,
+  jobRunner,
+  marketOverviewService,
+}) {
   return {
     async health() {
       return { status: "ok" };
+    },
+
+    /**
+     * Обзор рынка для приветственного экрана адаптера.
+     *
+     * Синхронный, в отличие от сообщений: состав ответа задан командой и не
+     * зависит от формулировки пользователя, поэтому ни маршрутизатор, ни
+     * планировщик здесь не нужны — модель вызывается ровно один раз, чтобы
+     * оформить уже собранные данные. Ждать столько же, сколько ждут ответа на
+     * вопрос, не приходится, и заводить ради этого задание с доставкой в
+     * callback значило бы городить машинерию под задержку, которой нет.
+     */
+    async marketOverview({ limit }) {
+      const result = await marketOverviewService.compose({ limit });
+
+      if (!result.ok) {
+        // 503, а не 500: недоступны внешние источники, а не сломан Core.
+        // Адаптеру этого достаточно, чтобы предложить повторить.
+        return { status: 503, json: { error: { code: result.error.code } } };
+      }
+
+      return { status: 200, json: { text: result.text, composedBy: result.composedBy } };
     },
 
     async enqueueMessage({ adapter, externalId, text, idempotencyKey }) {

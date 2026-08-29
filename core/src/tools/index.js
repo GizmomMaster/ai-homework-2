@@ -1,6 +1,7 @@
 import { BinanceClient } from "./BinanceClient.js";
 import { TtlCache } from "./cache.js";
 import { TOOL_ERROR, ToolError } from "./errors.js";
+import { MAX_OVERVIEW_COINS, buildMarketOverview } from "./marketOverview.js";
 import {
   KLINE_INTERVALS,
   optionalAmount,
@@ -13,6 +14,9 @@ import {
 
 export { TOOL_ERROR, ToolError } from "./errors.js";
 
+/** Имя инструмента обзора рынка — на него опирается команда /start. */
+export const MARKET_OVERVIEW_TOOL = "get_crypto_market_overview";
+
 /**
  * Время жизни кеша по инструментам. Разное не для красоты: срез стакана
  * устаревает за секунды, суточная сводка живёт минуту без потери смысла,
@@ -24,6 +28,12 @@ const TTL = {
   klines: 60_000,
   depth: 5_000,
   screener: 120_000,
+  // Обзор рынка — самый дорогой вызов набора: рейтинг плюс до десятка запросов
+  // истории, часть из них к CoinGecko с его низким лимитом на бесплатном
+  // тарифе. При этом главная его половина (итоги вчерашних суток) не меняется
+  // до полуночи, поэтому минута жизни здесь ничего не портит, а от повторного
+  // /start в чате спасает.
+  overview: 60_000,
 };
 
 /** Максимум свечей за раз — предел из §4 спецификации. */
@@ -42,17 +52,22 @@ const MAX_KLINES = 500;
  *
  * @param {{
  *   binance: BinanceClient,
+ *   coingecko?: import("./CoinGeckoClient.js").CoinGeckoClient,
  *   cache?: TtlCache,
  * }} deps
+ *   `coingecko` необязателен: без него доступны только инструменты поверх
+ *   биржи, а обзор рынка в реестр не попадает — рейтинга по капитализации
+ *   взять неоткуда, и лучше не иметь инструмента вовсе, чем иметь такой,
+ *   который всегда отказывает.
  */
-export function createTools({ binance, cache = new TtlCache() }) {
+export function createTools({ binance, coingecko, cache = new TtlCache() }) {
   /** Суточная сводка по паре. Общая для двух инструментов — и кеш общий. */
   const ticker24h = (symbol) =>
     cache.through(`t24:${symbol}`, TTL.ticker, () =>
       binance.get("/api/v3/ticker/24hr", { symbol }),
     );
 
-  return {
+  const tools = {
     get_crypto_current_price: {
       description:
         "Текущая спотовая цена пары, лучшие цены покупки и продажи (спред) и изменение за 24 часа.",
@@ -258,6 +273,36 @@ export function createTools({ binance, cache = new TtlCache() }) {
       },
     },
   };
+
+  if (coingecko) {
+    tools[MARKET_OVERVIEW_TOOL] = {
+      description:
+        "Обзор рынка: топ монет по рыночной капитализации (стейблкоины и обёртки вроде " +
+        "WBTC и stETH исключены) с итогами прошедших суток UTC — цена открытия и " +
+        "закрытия, изменение в процентах, объём торгов — и текущим состоянием. " +
+        "Единственный инструмент, который знает капитализацию: у биржи её нет.",
+      parameters: {
+        limit: {
+          type: "integer",
+          description: `Сколько монет вернуть, до ${MAX_OVERVIEW_COINS} (по умолчанию 10)`,
+        },
+      },
+      required: [],
+      async run(params) {
+        const limit = optionalCount(params.limit, {
+          max: MAX_OVERVIEW_COINS,
+          fallback: 10,
+          name: "limit",
+        });
+
+        return cache.through(`ovw:${limit}`, TTL.overview, () =>
+          buildMarketOverview({ coingecko, binance, limit }),
+        );
+      },
+    };
+  }
+
+  return tools;
 }
 
 /**

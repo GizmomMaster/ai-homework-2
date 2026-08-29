@@ -142,21 +142,46 @@ describe("реестр команд", () => {
 
       await findCommand("/start").handle(ctx);
 
-      assert.match(ctx.telegramClient.lastText(), /привет/i);
+      assert.match(ctx.telegramClient.sent[0].text, /привет/i);
       assert.deepEqual(ctx.coreClient.resets, [{ chatId: 8123 }]);
     });
 
-    it("содержит примеры запросов, которые можно отправить", async (t) => {
+    it("шлёт сводку по рынку вторым сообщением", async (t) => {
       muteConsole(t);
       const ctx = context();
 
       await findCommand("/start").handle(ctx);
 
-      const text = ctx.telegramClient.lastText();
-      // Хотя бы один пример — реальный вопрос с вопросительным знаком,
-      // а не просто перечисление возможностей.
-      assert.match(text, /\?/);
-      assert.match(text, /BTC|ETH|SOL/i, "пример называет конкретный актив");
+      assert.equal(ctx.coreClient.overviews.length, 1);
+      assert.equal(ctx.telegramClient.sent.length, 2, "приветствие и сводка — разные сообщения");
+      assert.match(ctx.telegramClient.lastText(), /Крипторынок/);
+    });
+
+    it("отдаёт таблицу блоком <pre>, а не сырым markdown", async (t) => {
+      muteConsole(t);
+      const ctx = context();
+
+      await findCommand("/start").handle(ctx);
+
+      const overview = ctx.telegramClient.sent[1];
+      assert.equal(overview.parseMode, "HTML");
+      // Единственный способ показать выровненные колонки в Telegram: таблиц
+      // он не поддерживает, а моноширинный шрифт есть только внутри <pre>.
+      assert.match(overview.text, /<pre><code>/);
+      assert.doesNotMatch(overview.text, /```/, "разметка блока кода не должна утечь в текст");
+      assert.doesNotMatch(overview.text, /\*\*/, "** не должно остаться в тексте");
+    });
+
+    it("если сводка не собралась, приветствие всё равно доходит", async (t) => {
+      muteConsole(t);
+      const ctx = context({ failOverview: true });
+
+      await findCommand("/start").handle(ctx);
+
+      assert.match(ctx.telegramClient.sent[0].text, /привет/i);
+      assert.match(ctx.telegramClient.lastText(), /не удалось/i);
+      // Отказ не должен оставлять человека без единой подсказки, что делать.
+      assert.match(ctx.telegramClient.lastText(), /BTC|ETH|SOL/i);
     });
   });
 });

@@ -8,7 +8,10 @@ import { TheoryAgent } from "./agents/TheoryAgent.js";
 import { PlannerAgent } from "./agents/PlannerAgent.js";
 import { PlanExecutor } from "./domain/PlanExecutor.js";
 import { SummaryAgent } from "./agents/SummaryAgent.js";
+import { MarketOverviewAgent } from "./agents/MarketOverviewAgent.js";
+import { MarketOverviewService } from "./domain/MarketOverviewService.js";
 import { BinanceClient } from "./tools/BinanceClient.js";
+import { CoinGeckoClient } from "./tools/CoinGeckoClient.js";
 import { createTools } from "./tools/index.js";
 import { CallbackDelivery } from "./jobs/CallbackDelivery.js";
 import { ProgressNotifier } from "./jobs/ProgressNotifier.js";
@@ -30,6 +33,7 @@ import { createServer } from "./http/server.js";
  *   plannerAgent?: import("./agents/PlannerAgent.js").PlannerAgent,
  *   planExecutor?: import("./domain/PlanExecutor.js").PlanExecutor,
  *   summaryAgent?: import("./agents/SummaryAgent.js").SummaryAgent,
+ *   overviewAgent?: import("./agents/MarketOverviewAgent.js").MarketOverviewAgent,
  *   tools?: ReturnType<typeof import("./tools/index.js").createTools>,
  *   fetchImpl?: typeof fetch,
  *   progressNotifier?: import("./jobs/ProgressNotifier.js").ProgressNotifier,
@@ -43,6 +47,7 @@ export function createApp({
   plannerAgent,
   planExecutor,
   summaryAgent,
+  overviewAgent,
   tools,
   fetchImpl,
   progressNotifier,
@@ -60,6 +65,10 @@ export function createApp({
     createTools({
       binance: new BinanceClient({
         baseUrl: config.tools.binanceBaseUrl,
+        timeoutMs: config.tools.timeoutMs,
+      }),
+      coingecko: new CoinGeckoClient({
+        baseUrl: config.tools.coingeckoBaseUrl,
         timeoutMs: config.tools.timeoutMs,
       }),
     });
@@ -95,8 +104,19 @@ export function createApp({
     deliveryBackoffMs: config.jobs.deliveryBackoffMs,
   });
 
+  const marketOverviewService = new MarketOverviewService({
+    tools: marketTools,
+    overviewAgent: overviewAgent ?? new MarketOverviewAgent({ llmRunner: runner }),
+  });
+
   const router = createRoutes(
-    createHandlers({ chatRepository, jobRepository, dialogService, jobRunner }),
+    createHandlers({
+      chatRepository,
+      jobRepository,
+      dialogService,
+      jobRunner,
+      marketOverviewService,
+    }),
   );
   const server = createServer({
     router,
