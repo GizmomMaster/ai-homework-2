@@ -82,11 +82,19 @@ export class CoreClient {
    * заводить ради этого задание незачем. Но два внешних API плюс вызов
    * модели — это секунды, поэтому таймаут свой, больше обычного.
    *
+   * Повторов здесь нет, и это отличие от остальных вызовов существенное.
+   * Обычный повтор рассчитан на то, что Core ещё поднимается, — тогда вторая
+   * попытка почти бесплатна. Здесь же истёкший таймаут означает не «Core не
+   * встал», а «модель медленно пишет»: повтор заставит её начать генерацию
+   * заново, добавит нагрузки на видеокарту и только отдалит ответ. Данные
+   * инструмента переживают повтор в кеше, работа модели — нет.
+   *
    * @returns {Promise<{ text: string, composedBy?: string }>}
    */
   async marketOverview() {
     return this.#call("GET", "/v1/market/overview", undefined, {
       timeoutMs: this.overviewTimeoutMs,
+      retries: 0,
     });
   }
 
@@ -94,13 +102,13 @@ export class CoreClient {
     return `/v1/conversations/${ADAPTER_NAME}/${encodeURIComponent(String(chatId))}`;
   }
 
-  async #call(method, path, body, { timeoutMs = this.timeoutMs } = {}) {
+  async #call(method, path, body, { timeoutMs = this.timeoutMs, retries = this.retries } = {}) {
     let lastError;
 
-    for (let attempt = 0; attempt <= this.retries; attempt += 1) {
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
       if (attempt > 0) {
         await sleep(this.retryDelayMs);
-        log(`Повторная попытка обращения к Core (${attempt}/${this.retries}): ${method} ${path}`);
+        log(`Повторная попытка обращения к Core (${attempt}/${retries}): ${method} ${path}`);
       }
 
       try {

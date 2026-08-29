@@ -41,15 +41,24 @@ describe("Core целиком", () => {
 
       await waitFor(() => core.delivered.length === 1, { label: "callback доставлен" });
 
-      assert.deepEqual(core.delivered[0].payload, {
-        jobId: accepted.json.jobId,
-        adapter: "telegram",
-        externalId: "8123",
-        status: "completed",
-        reply: { text: "ответ модели" },
-        // Маршрутизатор-заглушка тратит 20 + 8, отвечающий вызов — 40 + 12.
-        usage: { promptTokens: 60, completionTokens: 20, totalTokens: 52, contextLimit: 1000 },
-      });
+      // Время обработки — настоящие часы, сравнивать его с константой нельзя;
+      // проверяем отдельно, что оно есть и правдоподобно.
+      const { durationMs, ...usage } = core.delivered[0].payload.usage;
+      assert.equal(typeof durationMs, "number");
+      assert.ok(durationMs >= 0, "длительность не бывает отрицательной");
+
+      assert.deepEqual(
+        { ...core.delivered[0].payload, usage },
+        {
+          jobId: accepted.json.jobId,
+          adapter: "telegram",
+          externalId: "8123",
+          status: "completed",
+          reply: { text: "ответ модели" },
+          // Маршрутизатор-заглушка тратит 20 + 8, отвечающий вызов — 40 + 12.
+          usage: { promptTokens: 60, completionTokens: 20, totalTokens: 52, contextLimit: 1000 },
+        },
+      );
     });
 
     it("шлёт callback на адрес, заданный для адаптера", async (t) => {
@@ -147,7 +156,9 @@ describe("Core целиком", () => {
       const rejection = core.delivered[1].payload;
       assert.equal(rejection.status, "rejected");
       assert.equal(rejection.reason, "context_limit");
-      assert.deepEqual(rejection.usage, { totalTokens: 50, contextLimit: 40 });
+      const { durationMs, ...rejectionUsage } = rejection.usage;
+      assert.equal(typeof durationMs, "number", "время обработки есть и при отказе");
+      assert.deepEqual(rejectionUsage, { totalTokens: 50, contextLimit: 40 });
       assert.equal(rejection.reply, undefined, "текста ответа при отказе нет");
     });
 

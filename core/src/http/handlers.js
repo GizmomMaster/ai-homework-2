@@ -46,7 +46,10 @@ export function createHandlers({
         return { status: 503, json: { error: { code: result.error.code } } };
       }
 
-      return { status: 200, json: { text: result.text, composedBy: result.composedBy } };
+      return {
+        status: 200,
+        json: { text: result.text, composedBy: result.composedBy, usage: result.usage },
+      };
     },
 
     async enqueueMessage({ adapter, externalId, text, idempotencyKey }) {

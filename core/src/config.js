@@ -95,7 +95,7 @@ export const config = {
   lmstudio: {
     baseUrl: process.env.LMSTUDIO_BASE_URL || "http://localhost:1234",
     model: process.env.LMSTUDIO_MODEL || "bonsai-27b",
-    timeoutMs: positiveInt("LMSTUDIO_TIMEOUT_MS", 120000),
+    timeoutMs: positiveInt("LMSTUDIO_TIMEOUT_MS", 300000),
   },
 
   /**

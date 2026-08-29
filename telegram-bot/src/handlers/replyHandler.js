@@ -1,5 +1,17 @@
 import { markdownToTelegramHtml } from "../telegram/markdown.js";
+import { answerFooter } from "./answerFooter.js";
 import { log } from "../logger.js";
+
+/**
+ * Приписывает к ответу строку с временем и токенами.
+ *
+ * Пустой отступ перед ней — не косметика: без пустой строки markdown склеит
+ * подпись с последним абзацем ответа, и она перестанет читаться как служебная.
+ */
+function withFooter(text, usage) {
+  const footer = answerFooter(usage);
+  return footer ? `${text}\n\n${footer}` : text;
+}
 
 /**
  * Формулировки для пользователя живут здесь, а не в Core: Core присылает
@@ -88,7 +100,7 @@ export async function handleReply({ payload, telegramClient, progressTracker }) 
   if (payload.status === "completed") {
     await telegramClient.sendMessage({
       chatId,
-      text: markdownToTelegramHtml(payload.reply.text),
+      text: markdownToTelegramHtml(withFooter(payload.reply.text, payload.usage)),
       parseMode: "HTML",
     });
     log(`[job ${payload.jobId}] Ответ доставлен в чат ${chatId}.`);

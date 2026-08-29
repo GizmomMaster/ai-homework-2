@@ -134,9 +134,15 @@ export class JobRunner {
       onProgress,
     });
 
+    const took = Date.now() - startedAt;
+    // Время кладём в usage до записи: оттуда оно попадёт и в БД, и в callback
+    // адаптеру — тот показывает его пользователю под ответом. Меряется вся
+    // обработка задания, а не один вызов модели: пользователь ждал именно
+    // столько, включая маршрутизацию, поход на биржу и сведение отчёта.
+    if (outcome.usage) outcome.usage = { ...outcome.usage, durationMs: took };
+
     this.commitOutcome(job, outcome);
 
-    const took = Date.now() - startedAt;
     if (outcome.status === "completed") {
       log(
         `[job ${job.id}] Готово за ${took} мс ` +

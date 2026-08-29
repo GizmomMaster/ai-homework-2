@@ -138,6 +138,32 @@ describe("CoreClient", () => {
     });
   });
 
+  describe("обзор рынка", () => {
+    it("не повторяет запрос, даже когда повторы включены", async () => {
+      let attempts = 0;
+      const client = await connect(
+        () => {
+          attempts += 1;
+          return { status: 502, json: {} };
+        },
+        { retries: 3 },
+      );
+
+      await assert.rejects(() => client.marketOverview());
+      // Истёкший таймаут здесь значит «модель пишет медленно». Повтор
+      // заставил бы её начать генерацию заново и только отдалил бы ответ.
+      assert.equal(attempts, 1, "сводку повторять нельзя: это новая генерация");
+    });
+
+    it("ждёт дольше обычного запроса", async () => {
+      const client = new CoreClient({ baseUrl: "http://core.test", timeoutMs: 10 });
+      assert.ok(
+        client.overviewTimeoutMs > client.timeoutMs,
+        "Core тратит на сводку вызов модели, а не только запрос к бирже",
+      );
+    });
+  });
+
   describe("нормализация базового URL", () => {
     it("не дублирует слэш", async () => {
       core = await startTestServer(() => accepted);
