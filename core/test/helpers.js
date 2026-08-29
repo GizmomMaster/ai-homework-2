@@ -198,7 +198,12 @@ export function createFakeSummaryAgent(
  */
 export function createFakeOverviewAgent(
   reply = {
-    content: "**Крипторынок**\n\nРынок снижался.\n\n```\nМОНЕТА   ЦЕНА\nBTC     78033.00\n```",
+    content:
+      "**Крипторынок**\n\nРынок снижался.\n\n```\n" +
+      "МОНЕТА      ЦЕНА     Δ%\n" +
+      "BTC     78033.00  -3.00\n" +
+      "ETH      2452.47  -2.71\n" +
+      "DOGE      0.0853  -4.38\n```",
     promptTokens: 400,
     completionTokens: 90,
   },

@@ -18,7 +18,7 @@ describe("подпись под ответом", () => {
 
       assert.match(footer, /12\.4 с/);
       assert.match(footer, /1.420 токенов/, "сумма промпта и генерации");
-      assert.match(footer, /осталось 14.580 из 16.000/);
+      assert.match(footer, /\(14580\/16000 tokens\)/);
     });
 
     it("складывает токены всех обращений к модели за задание", () => {
@@ -38,7 +38,7 @@ describe("подпись под ответом", () => {
 
       assert.match(footer, /47\.0 с/);
       assert.match(footer, /1.300/);
-      assert.doesNotMatch(footer, /осталось/);
+      assert.doesNotMatch(footer, /tokens\)/);
     });
 
     it("одно время, если модель не звали", () => {
@@ -63,7 +63,7 @@ describe("подпись под ответом", () => {
       });
 
       assert.match(footer, /на ответ 2.015 токенов/);
-      assert.match(footer, /в контексте осталось 15.003 из 16.000/);
+      assert.match(footer, /\(15003\/16000 tokens\)/);
     });
   });
 
@@ -71,7 +71,7 @@ describe("подпись под ответом", () => {
     it("не уходит в минус при переполнении", () => {
       const footer = answerFooter({ totalTokens: 16200, contextLimit: 16000, durationMs: 1 });
 
-      assert.match(footer, /осталось 0 из/, "«минус 200 токенов» диалогу не бывает");
+      assert.match(footer, /\(0\/16000 tokens\)/, "«минус 200 токенов» диалогу не бывает");
     });
   });
 

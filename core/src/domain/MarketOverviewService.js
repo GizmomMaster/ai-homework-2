@@ -122,5 +122,39 @@ export function looksUnusable(text) {
   const outside = text.replace(/```[\s\S]*?```/g, "");
   if (/^.*\|.*\|.*$/m.test(outside)) return "markdown-таблица вне блока кода";
 
+  // Блок кода нужен ровно ради моноширинного шрифта под колонки. Если модель
+  // положила туда заголовок и пару фраз — а это её любимая ошибка, — читателю
+  // достанется проза, набранная как код, и ни одной таблицы.
+  for (const block of text.match(/```[\s\S]*?```/g) ?? []) {
+    if (!looksLikeTable(block.replace(/```/g, ""))) return "в блоке кода не таблица, а текст";
+  }
+
   return undefined;
+}
+
+/**
+ * Похоже ли содержимое блока на таблицу.
+ *
+ * Опора — не числа и не ключевые слова, а форма: у таблицы несколько строк с
+ * одинаковым числом колонок. Проза этого не даёт, сколько бы процентов в ней
+ * ни стояло, а таблица даёт по построению — и та, что рисует откат, и любая,
+ * которую модель выровняет сама.
+ *
+ * @param {string} block
+ */
+function looksLikeTable(block) {
+  const lines = block.split("\n").filter((line) => line.trim() !== "");
+  // Заголовок и хотя бы две монеты: на меньшем колонок не разглядеть.
+  if (lines.length < 3) return false;
+
+  const counts = lines.map((line) => line.trim().split(/\s+/).length);
+  const modal = counts
+    .slice()
+    .sort((a, b) => counts.filter((c) => c === b).length - counts.filter((c) => c === a).length)[0];
+
+  if (modal < 2) return false;
+
+  // Одну выбивающуюся строку прощаем: модель могла подписать колонку иначе.
+  const aligned = counts.filter((count) => count === modal).length;
+  return aligned / counts.length >= 0.8;
 }
