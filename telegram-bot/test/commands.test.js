@@ -146,15 +146,37 @@ describe("реестр команд", () => {
       assert.deepEqual(ctx.coreClient.resets, [{ chatId: 8123 }]);
     });
 
-    it("шлёт сводку по рынку вторым сообщением", async (t) => {
+    it("шлёт сводку по рынку последним сообщением", async (t) => {
       muteConsole(t);
       const ctx = context();
 
       await findCommand("/start").handle(ctx);
 
       assert.equal(ctx.coreClient.overviews.length, 1);
-      assert.equal(ctx.telegramClient.sent.length, 2, "приветствие и сводка — разные сообщения");
       assert.match(ctx.telegramClient.lastText(), /Крипторынок/);
+    });
+
+    it("показывает статус на время сбора и убирает его", async (t) => {
+      muteConsole(t);
+      const ctx = context();
+
+      await findCommand("/start").handle(ctx);
+
+      // Сбор идёт до двух с половиной минут — молчание после приветствия
+      // выглядело бы как поломка.
+      assert.match(ctx.telegramClient.sent[1].text, /Собираю сводку/);
+      assert.equal(ctx.telegramClient.deleted.length, 1, "статус не должен остаться в чате");
+      assert.equal(ctx.telegramClient.deleted[0].messageId, 2);
+    });
+
+    it("убирает статус и при отказе", async (t) => {
+      muteConsole(t);
+      const ctx = context({ failOverview: true });
+
+      await findCommand("/start").handle(ctx);
+
+      assert.equal(ctx.telegramClient.deleted.length, 1);
+      assert.match(ctx.telegramClient.lastText(), /не удалось/i);
     });
 
     it("отдаёт таблицу блоком <pre>, а не сырым markdown", async (t) => {
@@ -163,7 +185,7 @@ describe("реестр команд", () => {
 
       await findCommand("/start").handle(ctx);
 
-      const overview = ctx.telegramClient.sent[1];
+      const overview = ctx.telegramClient.sent[2];
       assert.equal(overview.parseMode, "HTML");
       // Единственный способ показать выровненные колонки в Telegram: таблиц
       // он не поддерживает, а моноширинный шрифт есть только внутри <pre>.

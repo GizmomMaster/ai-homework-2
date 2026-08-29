@@ -79,12 +79,20 @@ async function resetConversation({ chatId, telegramClient, coreClient }, confirm
   await sendSafely(telegramClient, chatId, confirmation);
 }
 
+/** Статус на время сбора: минута тишины после приветствия выглядит поломкой. */
+const OVERVIEW_PENDING_TEXT = "Собираю сводку по рынку…";
+
 /**
  * Сводка по рынку вторым сообщением после приветствия.
  *
  * Отдельным сообщением, а не приклеенной к приветствию строкой, по двум
- * причинам: собирается она секунды (два внешних API), и приветствие не должно
- * их ждать; а её отказ не должен утащить за собой приветствие.
+ * причинам: собирается она долго — два внешних API и вызов модели, которая
+ * пишет текст, — и приветствие не должно этого ждать; а её отказ не должен
+ * утащить за собой приветствие.
+ *
+ * Пока идёт сбор, висит статусное сообщение, и удаляется оно перед отправкой
+ * результата — тем же приёмом, что и статус обработки задания (см.
+ * `progressHandler`), чтобы в чате не оставалось следов ожидания.
  *
  * Текст приходит из Core в markdown — с таблицами внутри блоков кода. Это не
  * прихоть оформления: таблиц Telegram не поддерживает ни в markdown, ни в
@@ -92,14 +100,19 @@ async function resetConversation({ chatId, telegramClient, coreClient }, confirm
  * в который `markdownToTelegramHtml` превращает ```-блок.
  */
 async function sendMarketOverview({ chatId, telegramClient, coreClient }) {
+  const pending = await sendPending(telegramClient, chatId);
+
   let overview;
   try {
     overview = await coreClient.marketOverview();
   } catch (error) {
     logError(`[chat ${chatId}] Не удалось получить сводку по рынку:`, error);
+    await removePending(telegramClient, pending);
     await sendSafely(telegramClient, chatId, OVERVIEW_UNAVAILABLE_TEXT);
     return;
   }
+
+  await removePending(telegramClient, pending);
 
   const text = overview?.text?.trim();
   if (!text) {
@@ -109,6 +122,33 @@ async function sendMarketOverview({ chatId, telegramClient, coreClient }) {
   }
 
   await sendSafely(telegramClient, chatId, markdownToTelegramHtml(text), { parseMode: "HTML" });
+}
+
+/**
+ * Статусное сообщение — вещь необязательная: если оно не отправилось, сводку
+ * это отменять не должно. Поэтому отказ гасится, а не поднимается наверх.
+ */
+async function sendPending(telegramClient, chatId) {
+  try {
+    const sent = await telegramClient.sendMessage({ chatId, text: OVERVIEW_PENDING_TEXT });
+    // Идентификатор чата берём свой, а не из ответа Telegram, — как это
+    // делает progressHandler: в ответе он вложен, и форма ответа тут менее
+    // надёжная опора, чем то, что мы и так знаем.
+    return sent?.message_id ? { chatId, messageId: sent.message_id } : undefined;
+  } catch (error) {
+    logError(`[chat ${chatId}] Не удалось показать статус сбора сводки:`, error);
+    return undefined;
+  }
+}
+
+async function removePending(telegramClient, pending) {
+  if (!pending) return;
+  try {
+    await telegramClient.deleteMessage(pending);
+  } catch (error) {
+    // Не удалилось — не беда: лишняя строка в чате лучше потерянной сводки.
+    logError(`[chat ${pending.chatId}] Не удалось убрать статус сбора сводки:`, error);
+  }
 }
 
 /**
