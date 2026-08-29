@@ -6,7 +6,16 @@ import { createFakeCoreClient, createFakeTelegramClient, muteConsole } from "./h
 function context(coreOptions) {
   const telegramClient = createFakeTelegramClient();
   const coreClient = createFakeCoreClient(coreOptions);
-  return { chatId: 8123, telegramClient, coreClient };
+  // Сводку /start отпускает в фон, чтобы не держать цикл опроса Telegram.
+  // Собираем её промис, иначе тест проверял бы состояние до готовности.
+  const pending = [];
+  return {
+    chatId: 8123,
+    telegramClient,
+    coreClient,
+    background: (work) => pending.push(work),
+    settled: () => Promise.all(pending),
+  };
 }
 
 describe("реестр команд", () => {
@@ -146,11 +155,35 @@ describe("реестр команд", () => {
       assert.deepEqual(ctx.coreClient.resets, [{ chatId: 8123 }]);
     });
 
+    it("не держит обработчик, пока собирается сводка", async (t) => {
+      muteConsole(t);
+      let release;
+      const ctx = context();
+      ctx.coreClient.marketOverview = () => new Promise((resolve) => { release = resolve; });
+
+      await findCommand("/start").handle(ctx);
+      // Даём фоновой работе дойти до запроса: сводке предшествует отправка
+      // статусного сообщения, и она тоже асинхронная.
+      await new Promise(setImmediate);
+
+      // Цикл опроса Telegram разбирает апдейты по одному и ждёт обработчик.
+      // Задержись он здесь — встал бы весь бот, включая чужие чаты, на все
+      // те минуты, что модель пишет сводку.
+      assert.match(ctx.telegramClient.sent[0].text, /привет/i, "приветствие уже ушло");
+      assert.match(ctx.telegramClient.sent[1].text, /Собираю сводку/, "статус уже висит");
+      assert.equal(ctx.telegramClient.sent.length, 2, "сводки ещё нет — обработчик её не ждал");
+
+      release({ text: "**Готово**\n\n```\nBTC 1\n```" });
+      await ctx.settled();
+      assert.match(ctx.telegramClient.lastText(), /Готово/);
+    });
+
     it("шлёт сводку по рынку последним сообщением", async (t) => {
       muteConsole(t);
       const ctx = context();
 
       await findCommand("/start").handle(ctx);
+      await ctx.settled();
 
       assert.equal(ctx.coreClient.overviews.length, 1);
       assert.match(ctx.telegramClient.lastText(), /Крипторынок/);
@@ -161,6 +194,7 @@ describe("реестр команд", () => {
       const ctx = context();
 
       await findCommand("/start").handle(ctx);
+      await ctx.settled();
 
       // Сбор идёт до двух с половиной минут — молчание после приветствия
       // выглядело бы как поломка.
@@ -174,6 +208,7 @@ describe("реестр команд", () => {
       const ctx = context({ failOverview: true });
 
       await findCommand("/start").handle(ctx);
+      await ctx.settled();
 
       assert.equal(ctx.telegramClient.deleted.length, 1);
       assert.match(ctx.telegramClient.lastText(), /не удалось/i);
@@ -184,6 +219,7 @@ describe("реестр команд", () => {
       const ctx = context();
 
       await findCommand("/start").handle(ctx);
+      await ctx.settled();
 
       const overview = ctx.telegramClient.sent[2];
       assert.equal(overview.parseMode, "HTML");
@@ -199,6 +235,7 @@ describe("реестр команд", () => {
       const ctx = context({ failOverview: true });
 
       await findCommand("/start").handle(ctx);
+      await ctx.settled();
 
       assert.match(ctx.telegramClient.sent[0].text, /привет/i);
       assert.match(ctx.telegramClient.lastText(), /не удалось/i);
