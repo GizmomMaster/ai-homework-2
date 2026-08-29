@@ -106,6 +106,13 @@ export const config = {
    */
   tools: {
     binanceBaseUrl: process.env.BINANCE_BASE_URL || "https://api.binance.com",
+    /**
+     * Источник рыночной капитализации. Нужен отдельно от биржи по существу,
+     * а не для подстраховки: Binance знает торговые пары и их объёмы, но не
+     * знает, сколько монет выпущено, — рейтинга «топ по капитализации» из неё
+     * не получить.
+     */
+    coingeckoBaseUrl: process.env.COINGECKO_BASE_URL || "https://api.coingecko.com",
     timeoutMs: positiveInt("TOOLS_TIMEOUT_MS", 10000),
   },
 

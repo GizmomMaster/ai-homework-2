@@ -16,6 +16,11 @@ export function createStubHandlers() {
   const byIdempotencyKey = new Map();
 
   return {
+    /** Заглушке взять обзор неоткуда: внешних источников у неё нет. */
+    async marketOverview() {
+      return { status: 503, json: { error: { code: "unavailable" } } };
+    },
+
     async health() {
       return { status: "ok", mode: "stub" };
     },

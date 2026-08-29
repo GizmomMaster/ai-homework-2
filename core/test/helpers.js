@@ -17,7 +17,11 @@ export function testConfig(overrides = {}) {
     llmProvider: "lmstudio",
     ollama: { baseUrl: "http://ollama.test", model: "test-model", timeoutMs: 1000 },
     lmstudio: { baseUrl: "http://lmstudio.test", model: "test-model", timeoutMs: 1000 },
-    tools: { binanceBaseUrl: "http://binance.test", timeoutMs: 500 },
+    tools: {
+      binanceBaseUrl: "http://binance.test",
+      coingeckoBaseUrl: "http://coingecko.test",
+      timeoutMs: 500,
+    },
     jobs: {
       pollIntervalMs: 10,
       deliveryMaxAttempts: 3,
@@ -189,6 +193,29 @@ export function createFakeSummaryAgent(
 }
 
 /**
+ * Заглушка агента сводки по рынку. По умолчанию отвечает пригодным текстом —
+ * с таблицей в блоке кода, как того требует `looksUnusable`.
+ */
+export function createFakeOverviewAgent(
+  reply = {
+    content: "**Крипторынок**\n\nРынок снижался.\n\n```\nМОНЕТА   ЦЕНА\nBTC     78033.00\n```",
+    promptTokens: 400,
+    completionTokens: 90,
+  },
+) {
+  const calls = [];
+  return {
+    calls,
+    async compose(overview) {
+      calls.push(overview);
+      const value = typeof reply === "function" ? reply(overview) : reply;
+      if (value instanceof Error) throw value;
+      return value;
+    },
+  };
+}
+
+/**
  * Подменённый fetch для доставки callback'ов: копит доставленные полезные
  * нагрузки и умеет падать заданное число раз подряд.
  *
@@ -222,6 +249,7 @@ export async function startCoreApp({
   plannerAgent,
   planExecutor,
   summaryAgent,
+  overviewAgent,
   tools,
   transport,
   progressNotifier,
@@ -237,6 +265,7 @@ export async function startCoreApp({
     plannerAgent: plannerAgent ?? createFakePlanner(),
     planExecutor: planExecutor ?? createFakeExecutor(),
     summaryAgent: summaryAgent ?? createFakeSummaryAgent(),
+    overviewAgent,
     tools,
     fetchImpl: callbackTransport.fetchImpl,
     // По умолчанию — заглушка, а не настоящий ProgressNotifier: иначе

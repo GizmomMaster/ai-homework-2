@@ -39,14 +39,26 @@ export function createFakeTelegramClient({ failSendMessage = false } = {}) {
  * Заглушка CoreClient: копит вызовы и умеет падать.
  * @param {{ failSendMessage?: boolean, failReset?: boolean }} [options]
  */
-export function createFakeCoreClient({ failSendMessage = false, failReset = false } = {}) {
+export function createFakeCoreClient({
+  failSendMessage = false,
+  failReset = false,
+  failOverview = false,
+  overviewText = "**Крипторынок за 28 августа 2026**\n\n```\nМОНЕТА  ЦЕНА\nBTC     78033.00\n```",
+} = {}) {
   const sentMessages = [];
   const resets = [];
+  const overviews = [];
   let jobCounter = 0;
 
   return {
     sentMessages,
     resets,
+    overviews,
+    async marketOverview() {
+      if (failOverview) throw new Error("Core недоступен");
+      overviews.push({});
+      return { text: overviewText };
+    },
     async sendMessage({ chatId, text, updateId }) {
       if (failSendMessage) throw new Error("Core недоступен");
       sentMessages.push({ chatId, text, updateId });

@@ -34,6 +34,7 @@ export class CoreClient {
   constructor({
     baseUrl,
     timeoutMs = 10000,
+    overviewTimeoutMs = 30000,
     retries = 3,
     retryDelayMs = 1000,
     authToken,
@@ -42,6 +43,7 @@ export class CoreClient {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.authToken = authToken;
     this.timeoutMs = timeoutMs;
+    this.overviewTimeoutMs = overviewTimeoutMs;
     this.retries = retries;
     this.retryDelayMs = retryDelayMs;
     this.fetchImpl = fetchImpl;
@@ -70,11 +72,29 @@ export class CoreClient {
     return this.#call("POST", `${this.#conversationPath(chatId)}/reset`);
   }
 
+  /**
+   * Обзор рынка для приветствия (команда /start).
+   *
+   * В отличие от сообщений, ответ приходит прямо здесь, а не в callback:
+   * состав обзора задан командой, поэтому разбирать запрос и планировать шаги
+   * не нужно — модель вызывается один раз, чтобы оформить уже собранные
+   * данные. Ждать столько же, сколько ответа на вопрос, не приходится, и
+   * заводить ради этого задание незачем. Но два внешних API плюс вызов
+   * модели — это секунды, поэтому таймаут свой, больше обычного.
+   *
+   * @returns {Promise<{ text: string, composedBy?: string }>}
+   */
+  async marketOverview() {
+    return this.#call("GET", "/v1/market/overview", undefined, {
+      timeoutMs: this.overviewTimeoutMs,
+    });
+  }
+
   #conversationPath(chatId) {
     return `/v1/conversations/${ADAPTER_NAME}/${encodeURIComponent(String(chatId))}`;
   }
 
-  async #call(method, path, body) {
+  async #call(method, path, body, { timeoutMs = this.timeoutMs } = {}) {
     let lastError;
 
     for (let attempt = 0; attempt <= this.retries; attempt += 1) {
@@ -84,7 +104,7 @@ export class CoreClient {
       }
 
       try {
-        return await this.#attempt(method, path, body);
+        return await this.#attempt(method, path, body, timeoutMs);
       } catch (error) {
         if (!(error instanceof CoreUnavailableError)) throw error;
         lastError = error;
@@ -94,7 +114,7 @@ export class CoreClient {
     throw lastError;
   }
 
-  async #attempt(method, path, body) {
+  async #attempt(method, path, body, timeoutMs) {
     let response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -104,7 +124,7 @@ export class CoreClient {
           ...(this.authToken ? { "X-Core-Token": this.authToken } : {}),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
       throw new CoreUnavailableError(
