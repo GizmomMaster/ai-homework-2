@@ -1,4 +1,4 @@
-import { TOOL_ERROR, ToolError } from "./errors.js";
+import { TOOL_ERROR, ToolError, describeFetchError } from "./errors.js";
 
 /**
  * Клиент публичного REST API CoinGecko.
@@ -56,7 +56,7 @@ export class CoinGeckoClient {
       }
       throw new ToolError(
         TOOL_ERROR.unavailable,
-        `Не удалось обратиться к CoinGecko (${path}): ${error.message}`,
+        `Не удалось обратиться к CoinGecko (${path}): ${describeFetchError(error)}`,
       );
     }
 

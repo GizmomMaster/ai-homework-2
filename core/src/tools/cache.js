@@ -22,6 +22,12 @@ export class TtlCache {
   /**
    * Возвращает значение из кеша либо вычисляет и запоминает его.
    *
+   * **`undefined` не кешируется** и возвращается как есть. Это способ для
+   * вызывающего кода сказать «ответа нет, но запомнить это нечестно»: неудача
+   * из-за оборванной сети не должна закрепиться на всё время жизни записи и
+   * превратиться в постоянный пробел в отчёте. Значение, которое нужно
+   * запомнить, включая пустое, передаётся как `null`.
+   *
    * @template T
    * @param {string} key
    * @param {number} ttlMs время жизни; 0 отключает кеширование
@@ -35,7 +41,7 @@ export class TtlCache {
     if (hit && hit.expiresAt > this.now()) return hit.value;
 
     const value = await produce();
-    this.#set(key, value, ttlMs);
+    if (value !== undefined) this.#set(key, value, ttlMs);
     return value;
   }
 

@@ -1,4 +1,4 @@
-import { TOOL_ERROR, ToolError } from "./errors.js";
+import { TOOL_ERROR, ToolError, describeFetchError } from "./errors.js";
 
 /** Код Binance для неизвестной торговой пары. */
 const BINANCE_UNKNOWN_SYMBOL = -1121;
@@ -56,7 +56,7 @@ export class BinanceClient {
       }
       throw new ToolError(
         TOOL_ERROR.unavailable,
-        `Не удалось обратиться к Binance (${path}): ${error.message}`,
+        `Не удалось обратиться к Binance (${path}): ${describeFetchError(error)}`,
       );
     }
 
