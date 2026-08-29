@@ -400,6 +400,9 @@ describe("DialogService", () => {
 
       assert.equal(outcome.status, "failed");
       assert.equal(outcome.reason, LLM_ERROR.timeout);
+      // За один запрос к модели обращаются несколько агентов подряд, и без
+      // пометки по логу не понять, который из них не ответил.
+      assert.match(outcome.errorMessage, /^\[planning\]/);
     });
 
     it("планировщик видит историю диалога", async () => {
@@ -437,6 +440,7 @@ describe("DialogService", () => {
       assert.equal(outcome.status, "failed");
       assert.equal(outcome.reason, LLM_ERROR.unavailable);
       assert.equal(ctx.llmRunner.calls.length, 0);
+      assert.match(outcome.errorMessage, /^\[routing\]/);
     });
   });
 

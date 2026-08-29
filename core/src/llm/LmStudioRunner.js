@@ -1,4 +1,5 @@
 import { LLM_ERROR, LlmError } from "./LlmRunner.js";
+import { badResponseMessage } from "./badResponse.js";
 import { stripThinking } from "./stripThinking.js";
 
 /** @typedef {import("./LlmRunner.js").LlmRunner} LlmRunner */
@@ -87,7 +88,16 @@ export class LmStudioRunner {
     const data = await response.json();
     const message = data.choices?.[0]?.message;
     if (!message || typeof message.content !== "string") {
-      throw new LlmError(LLM_ERROR.badResponse, "Некорректный формат ответа от LM Studio.");
+      throw new LlmError(
+        LLM_ERROR.badResponse,
+        badResponseMessage({
+          vendor: "LM Studio",
+          hint: diagnoseLmStudio(data),
+          data,
+          messages,
+          format,
+        }),
+      );
     }
 
     const content = stripThinking(message.content);
@@ -97,7 +107,15 @@ export class LmStudioRunner {
       // размышление и не дошла до ответа.
       throw new LlmError(
         LLM_ERROR.badResponse,
-        "Модель вернула пустой ответ (возможно, генерация ушла целиком в блок размышления).",
+        badResponseMessage({
+          vendor: "LM Studio",
+          hint:
+            "Модель вернула пустой ответ — возможно, генерация ушла целиком в блок " +
+            `размышления. Сгенерировано токенов: ${data.usage?.completion_tokens ?? "неизвестно"}.`,
+          data,
+          messages,
+          format,
+        }),
       );
     }
 
@@ -107,6 +125,38 @@ export class LmStudioRunner {
       completionTokens: data.usage?.completion_tokens ?? 0,
     };
   }
+}
+
+/**
+ * Догадка о причине нечитаемого ответа. Именно догадка — тело ответа и
+ * размер запроса едут рядом, см. {@link badResponseMessage}.
+ *
+ * @param {unknown} data разобранное тело ответа
+ */
+export function diagnoseLmStudio(data) {
+  // LM Studio умеет ответить 200 с телом-ошибкой: до проверки response.ok
+  // дело в таком случае не доходит, и HTTP-код ничего не подсказывает.
+  if (data?.error !== undefined) {
+    return "LM Studio вернула ошибку в теле ответа при статусе 200.";
+  }
+
+  if (Array.isArray(data?.choices) && data.choices.length === 0) {
+    return (
+      "Пустой список choices — генерация не началась. Стоит проверить длину " +
+      "контекста, заданную при загрузке модели: промпт длиннее неё не " +
+      "поместится, а запросом эту длину не переопределить."
+    );
+  }
+
+  const message = data?.choices?.[0]?.message;
+  if (message && typeof message.reasoning_content === "string") {
+    return (
+      "Модель отдала размышление отдельным полем reasoning_content, а content " +
+      "пуст — вся генерация ушла в рассуждение."
+    );
+  }
+
+  return "В ответе нет choices[0].message.content.";
 }
 
 /**

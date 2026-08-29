@@ -205,6 +205,79 @@ describe("LmStudioRunner", () => {
       });
     });
 
+    describe("подробности в сообщении", () => {
+      /**
+       * Само тело ответа обязано попасть в сообщение: догадка может быть
+       * неверной, а воспроизвести случай к моменту разбора уже нельзя —
+       * модель в LM Studio к тому времени бывает другой.
+       */
+      it("прикладывает тело ответа и размер запроса", async () => {
+        const runner = await connect(() => ({ json: { unexpected: "нечто" } }));
+
+        await assert.rejects(() => runner.chat(messages), (error) => {
+          assert.match(error.message, /"unexpected":"нечто"/, "тело ответа целиком");
+          assert.match(error.message, /сообщ\./, "число сообщений запроса");
+          assert.match(error.message, /знаков/, "размер промпта");
+          return true;
+        });
+      });
+
+      it("узнаёт ошибку в теле при статусе 200", async () => {
+        const runner = await connect(() => ({ json: { error: "model is not loaded" } }));
+
+        await assert.rejects(() => runner.chat(messages), (error) => {
+          assert.match(error.message, /ошибку в теле ответа при статусе 200/);
+          assert.match(error.message, /model is not loaded/);
+          return true;
+        });
+      });
+
+      it("узнаёт пустой список choices и называет контекст", async () => {
+        const runner = await connect(() => ({ json: { choices: [], usage: {} } }));
+
+        await assert.rejects(() => runner.chat(messages), (error) => {
+          assert.match(error.message, /Пустой список choices/);
+          assert.match(error.message, /длину контекста/);
+          return true;
+        });
+      });
+
+      it("узнаёт reasoning-модель, отдавшую одно размышление", async () => {
+        const runner = await connect(() => ({
+          json: {
+            choices: [{ message: { role: "assistant", content: null, reasoning_content: "думал" } }],
+          },
+        }));
+
+        await assert.rejects(() => runner.chat(messages), (error) => {
+          assert.match(error.message, /reasoning_content/);
+          return true;
+        });
+      });
+
+      it("отмечает, что запрос шёл со схемой", async () => {
+        const runner = await connect(() => ({ json: { unexpected: true } }));
+
+        await assert.rejects(
+          () => runner.chat(messages, { format: { type: "object" } }),
+          (error) => {
+            assert.match(error.message, /json_schema/);
+            return true;
+          },
+        );
+      });
+
+      it("длинное тело обрезает, а не заливает им лог", async () => {
+        const runner = await connect(() => ({ json: { junk: "я".repeat(5000) } }));
+
+        await assert.rejects(() => runner.chat(messages), (error) => {
+          assert.ok(error.message.length < 1200, `сообщение ${error.message.length} знаков`);
+          assert.match(error.message, /…/);
+          return true;
+        });
+      });
+    });
+
     it("недоступный сервер → код llm_unavailable с подсказкой", async () => {
       const runner = new LmStudioRunner({ baseUrl: "http://127.0.0.1:1", model: "test-model" });
 

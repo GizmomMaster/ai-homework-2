@@ -143,7 +143,7 @@ export class DialogService {
         // а не является условием работы диалога.
         logError("Маршрутизатор вернул неразбираемый ответ, отвечаем без классификации:", error);
       } else {
-        return this.#llmFailure(error);
+        return this.#llmFailure(error, PROGRESS_STAGE.routing);
       }
     }
 
@@ -180,7 +180,7 @@ export class DialogService {
       onProgress?.({ stage: PROGRESS_STAGE.answering });
       result = await this.theoryAgent.answer(messages);
     } catch (error) {
-      return this.#llmFailure(error);
+      return this.#llmFailure(error, PROGRESS_STAGE.answering);
     }
     add(spent, result);
 
@@ -247,7 +247,7 @@ export class DialogService {
     } catch (error) {
       // В отличие от маршрутизатора, отвечать без планировщика нечем:
       // выдумать рыночные данные — единственное, что осталось бы модели.
-      return this.#llmFailure(error);
+      return this.#llmFailure(error, PROGRESS_STAGE.planning);
     }
 
     if (!plan.canExecute || plan.plan.length === 0) {
@@ -362,14 +362,20 @@ export class DialogService {
    * это баг в нашем коде, а не сбой модели: возвращаем его отдельной причиной,
    * чтобы он не выглядел в логах как «Ollama недоступна» и чтобы задание всё
    * же завершилось, а не зависло в running до перезапуска.
+   *
+   * @param {Error & { code?: string }} error
+   * @param {string} stage какой агент не ответил. К модели за один запрос
+   *   обращаются несколько агентов подряд, и без пометки по логу не понять,
+   *   упал разбор запроса или уже составление ответа, — а промпты, схемы и
+   *   температуры у них разные, и чинить их пришлось бы вслепую.
    */
-  #llmFailure(error) {
+  #llmFailure(error, stage) {
     const known = Object.values(LLM_ERROR).includes(error.code);
     return {
       status: JOB_STATUS.failed,
       reason: known ? error.code : FAILURE_REASON.internal,
       // Текст ошибки нужен только для лога Core; наружу уходит код причины.
-      errorMessage: known ? error.message : `${error.name}: ${error.message}`,
+      errorMessage: `[${stage}] ${known ? error.message : `${error.name}: ${error.message}`}`,
     };
   }
 
