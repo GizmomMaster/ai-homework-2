@@ -35,10 +35,11 @@ export class MarketOverviewService {
 
   /**
    * @param {{ limit?: number }} [input]
-   * @returns {Promise<{ ok: true, text: string, composedBy: "model"|"fallback" }
+   * @returns {Promise<{ ok: true, text: string, composedBy: "model"|"fallback", usage: object }
    *          | { ok: false, error: { code: string } }>}
    */
   async compose({ limit } = {}) {
+    const startedAt = Date.now();
     const collected = await executeTool(this.tools, MARKET_OVERVIEW_TOOL, { limit });
 
     if (!collected.ok) {
@@ -49,7 +50,20 @@ export class MarketOverviewService {
     }
 
     const written = await this.#write(collected.value);
-    return { ok: true, ...written };
+
+    return {
+      ok: true,
+      text: written.text,
+      composedBy: written.composedBy,
+      // Меряем всю сборку, а не один вызов модели: пользователь ждал и
+      // походов на биржу тоже. Контекстного окна у сводки нет — она не часть
+      // диалога, — поэтому в usage только стоимость и время.
+      usage: {
+        promptTokens: written.promptTokens ?? 0,
+        completionTokens: written.completionTokens ?? 0,
+        durationMs: Date.now() - startedAt,
+      },
+    };
   }
 
   async #write(overview) {
@@ -70,8 +84,15 @@ export class MarketOverviewService {
         return fallback();
       }
 
-      log("Сводка по рынку собрана моделью.");
-      return { text, composedBy: "model" };
+      log(
+        `Сводка по рынку собрана моделью (${result.promptTokens ?? 0}+${result.completionTokens ?? 0} токенов).`,
+      );
+      return {
+        text,
+        composedBy: "model",
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+      };
     } catch (error) {
       logError("Модель не собрала сводку по рынку, показываем таблицу как есть:", error);
       return fallback();

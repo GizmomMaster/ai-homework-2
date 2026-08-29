@@ -50,10 +50,10 @@ export const config = {
      * Значение обязано перекрывать то, сколько Core разрешено на это
      * потратить, иначе адаптер сдастся раньше, чем сдастся Core, и работа
      * модели пропадёт впустую. Складывается из `LMSTUDIO_TIMEOUT_MS` (по
-     * умолчанию 120 с на генерацию) и `TOOLS_TIMEOUT_MS` на запросы к биржам.
+     * умолчанию 300 с на генерацию) и `TOOLS_TIMEOUT_MS` на запросы к биржам.
      * Меняя таймаут модели в Core, поднимите и этот.
      */
-    overviewTimeoutMs: positiveInt("CORE_OVERVIEW_TIMEOUT_MS", 150000),
+    overviewTimeoutMs: positiveInt("CORE_OVERVIEW_TIMEOUT_MS", 330000),
     // Core отвечает сразу, не дожидаясь модели, поэтому долгих ожиданий тут
     // нет — повторы нужны только на случай, что Core ещё поднимается.
     retries: positiveInt("CORE_RETRIES", 3),

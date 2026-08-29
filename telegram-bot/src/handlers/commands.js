@@ -1,6 +1,7 @@
 import { log, logError } from "../logger.js";
 import { sendSafely } from "../telegram/send.js";
 import { markdownToTelegramHtml } from "../telegram/markdown.js";
+import { answerFooter } from "./answerFooter.js";
 
 /**
  * @typedef {Object} CommandContext
@@ -142,7 +143,13 @@ async function sendMarketOverview({ chatId, telegramClient, coreClient }) {
     return;
   }
 
-  await sendSafely(telegramClient, chatId, markdownToTelegramHtml(text), { parseMode: "HTML" });
+  const footer = answerFooter(overview.usage);
+  await sendSafely(
+    telegramClient,
+    chatId,
+    markdownToTelegramHtml(footer ? `${text}\n\n${footer}` : text),
+    { parseMode: "HTML" },
+  );
 }
 
 /**
