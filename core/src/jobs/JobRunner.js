@@ -22,6 +22,7 @@ export class JobRunner {
    *   jobRepository: import("../db/jobRepository.js").JobRepository,
    *   dialogService: import("../domain/DialogService.js").DialogService,
    *   callbackDelivery: import("./CallbackDelivery.js").CallbackDelivery,
+   *   progressNotifier?: import("./ProgressNotifier.js").ProgressNotifier,
    *   pollIntervalMs?: number,
    *   deliveryMaxAttempts?: number,
    *   deliveryBackoffMs?: number,
@@ -33,6 +34,7 @@ export class JobRunner {
     jobRepository,
     dialogService,
     callbackDelivery,
+    progressNotifier,
     pollIntervalMs = 500,
     deliveryMaxAttempts = 6,
     deliveryBackoffMs = 2000,
@@ -42,6 +44,7 @@ export class JobRunner {
     this.jobRepository = jobRepository;
     this.dialogService = dialogService;
     this.callbackDelivery = callbackDelivery;
+    this.progressNotifier = progressNotifier;
     this.pollIntervalMs = pollIntervalMs;
     this.deliveryMaxAttempts = deliveryMaxAttempts;
     this.deliveryBackoffMs = deliveryBackoffMs;
@@ -116,9 +119,19 @@ export class JobRunner {
     const startedAt = Date.now();
     this.jobRepository.markRunning(job.id);
 
+    // Диалог не знает про адаптер — статус ему шлём мы, зная, кому доставлять.
+    // Без conversation (не должно случаться) или progressNotifier статус
+    // просто не отправляется — это не ошибка обработки задания.
+    const conversation = this.chatRepository.findConversationById(job.conversationId);
+    const onProgress =
+      conversation && this.progressNotifier
+        ? (progress) => this.progressNotifier.notify(job, conversation, progress)
+        : undefined;
+
     const outcome = await this.dialogService.process({
       conversationId: job.conversationId,
       text: job.requestText,
+      onProgress,
     });
 
     this.commitOutcome(job, outcome);

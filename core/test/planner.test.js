@@ -274,6 +274,77 @@ describe("PlanExecutor", () => {
 
     assert.deepEqual(await executor.run([]), { steps: [], succeeded: 0, failed: 0 });
   });
+
+  describe("промежуточный статус (onStep)", () => {
+    it("вызывается на каждый завершённый шаг", async () => {
+      const executor = new PlanExecutor({ tools: toolbox(async () => ({})) });
+      const seen = [];
+
+      await executor.run(
+        [
+          { action: "первый", toolToUse: "probe" },
+          { action: "второй", toolToUse: "probe" },
+        ],
+        { onStep: (step) => seen.push(step) },
+      );
+
+      assert.equal(seen.length, 2);
+      assert.deepEqual(
+        seen.map((s) => s.action),
+        ["первый", "второй"],
+      );
+      assert.ok(seen.every((s) => s.totalSteps === 2));
+    });
+
+    it("сообщает нарастающий счётчик завершённых шагов", async () => {
+      const executor = new PlanExecutor({
+        tools: toolbox(async ({ delay }) => {
+          await new Promise((r) => setTimeout(r, delay ?? 0));
+          return {};
+        }),
+      });
+      const counts = [];
+
+      await executor.run(
+        [
+          { action: "медленный", toolToUse: "probe", parameters: { delay: 20 } },
+          { action: "быстрый", toolToUse: "probe", parameters: { delay: 0 } },
+        ],
+        { onStep: (step) => counts.push(step.completedCount) },
+      );
+
+      assert.deepEqual(counts, [1, 2]);
+    });
+
+    it("сообщает исход шага (ok/отказ)", async () => {
+      const executor = new PlanExecutor({
+        tools: toolbox(async ({ fail }) => {
+          if (fail) throw new Error("сломалось");
+          return {};
+        }),
+      });
+      const seen = [];
+
+      await executor.run(
+        [
+          { action: "хороший", toolToUse: "probe", parameters: {} },
+          { action: "плохой", toolToUse: "probe", parameters: { fail: true } },
+        ],
+        { onStep: (step) => seen.push(step) },
+      );
+
+      assert.equal(seen.find((s) => s.action === "хороший").ok, true);
+      assert.equal(seen.find((s) => s.action === "плохой").ok, false);
+    });
+
+    it("необязателен — план выполняется и без него", async () => {
+      const executor = new PlanExecutor({ tools: toolbox(async () => ({})) });
+
+      const result = await executor.run([{ action: "?", toolToUse: "probe" }]);
+
+      assert.equal(result.succeeded, 1);
+    });
+  });
 });
 
 describe("сборка отчёта", () => {

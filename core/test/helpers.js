@@ -14,8 +14,9 @@ export function testConfig(overrides = {}) {
     maxBodyBytes: 64 * 1024,
     sqlitePath: ":memory:",
     contextWindowTokens: 1000,
-    llmProvider: "ollama",
+    llmProvider: "lmstudio",
     ollama: { baseUrl: "http://ollama.test", model: "test-model", timeoutMs: 1000 },
+    lmstudio: { baseUrl: "http://lmstudio.test", model: "test-model", timeoutMs: 1000 },
     tools: { binanceBaseUrl: "http://binance.test", timeoutMs: 500 },
     jobs: {
       pollIntervalMs: 10,
@@ -95,6 +96,23 @@ export function createFakeTheoryAgent(
 }
 
 /**
+ * Заглушка ProgressNotifier: копит статусы вместо похода в сеть. Отдельно от
+ * `createFakeCallbackTransport`, потому что статусы обработки и доставка
+ * финального ответа — разные вещи, и смешивать их в одном массиве `delivered`
+ * не стоит: тесты, ждущие ровно один финальный результат, иначе увидят там
+ * ещё и промежуточные события.
+ */
+export function createFakeProgressNotifier() {
+  const calls = [];
+  return {
+    calls,
+    notify(job, conversation, progress) {
+      calls.push({ jobId: job.id, conversation, progress });
+    },
+  };
+}
+
+/**
  * Заглушка планировщика. `result` — объект плана, функция от входа или Error.
  */
 export function createFakePlanner(result = { canExecute: false, fallbackMessage: "не умею" }) {
@@ -119,20 +137,33 @@ export function createFakePlanner(result = { canExecute: false, fallbackMessage:
 
 /**
  * Заглушка исполнителя плана: превращает шаги в результаты по функции
- * `outcome(step)`; по умолчанию все шаги успешны.
+ * `outcome(step)`; по умолчанию все шаги успешны. Зовёт `onStep` так же, как
+ * настоящий PlanExecutor (по одному на шаг, в порядке плана — здесь он и так
+ * синхронный, без параллелизма), чтобы можно было проверять сквозную
+ * проводку прогресса через DialogService, не поднимая настоящие инструменты.
  */
 export function createFakeExecutor(outcome = () => ({ ok: true, value: { ok: 1 } })) {
   const calls = [];
   return {
     calls,
-    async run(plan) {
+    async run(plan, { onStep } = {}) {
       calls.push(plan);
-      const steps = plan.map((step, index) => ({
-        stepNumber: index + 1,
-        action: step.action ?? step.toolToUse,
-        tool: step.toolToUse,
-        ...outcome(step, index),
-      }));
+      const steps = plan.map((step, index) => {
+        const result = {
+          stepNumber: index + 1,
+          action: step.action ?? step.toolToUse,
+          tool: step.toolToUse,
+          ...outcome(step, index),
+        };
+        onStep?.({
+          stepNumber: result.stepNumber,
+          totalSteps: plan.length,
+          action: result.action,
+          ok: result.ok,
+          completedCount: index + 1,
+        });
+        return result;
+      });
       const succeeded = steps.filter((s) => s.ok).length;
       return { steps, succeeded, failed: steps.length - succeeded };
     },
@@ -193,6 +224,7 @@ export async function startCoreApp({
   summaryAgent,
   tools,
   transport,
+  progressNotifier,
   config: overrides,
 } = {}) {
   const config = testConfig(overrides);
@@ -207,6 +239,11 @@ export async function startCoreApp({
     summaryAgent: summaryAgent ?? createFakeSummaryAgent(),
     tools,
     fetchImpl: callbackTransport.fetchImpl,
+    // По умолчанию — заглушка, а не настоящий ProgressNotifier: иначе
+    // прогресс-пинги на каждый вызов process() шли бы через тот же fetchImpl,
+    // что и доставка ответа, и попадали бы в тот же массив `delivered`,
+    // смешивая статусы с финальным результатом в тестах, которые его не ждут.
+    progressNotifier: progressNotifier ?? createFakeProgressNotifier(),
   });
 
   app.start();

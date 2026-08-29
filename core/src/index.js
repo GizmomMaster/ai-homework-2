@@ -7,7 +7,8 @@ const app = createApp({ config });
 app.start();
 app.server.listen(config.port, config.host, () => {
   log(`Core Orchestrator слушает http://${config.host}:${config.port}`);
-  log(`Модель: ${config.llmProvider}/${config.ollama.model}, контекст ${config.contextWindowTokens} токенов.`);
+  const activeModel = config[config.llmProvider]?.model;
+  log(`Модель: ${config.llmProvider}/${activeModel}, контекст ${config.contextWindowTokens} токенов.`);
 
   const adapters = Object.keys(config.callbackUrls);
   if (adapters.length === 0) {

@@ -6,6 +6,7 @@ import { DialogService } from "../src/domain/DialogService.js";
 import { JOB_STATUS } from "../src/db/jobRepository.js";
 import {
   createFakeCallbackTransport,
+  createFakeProgressNotifier,
   createFakeRouter,
   createFakeTheoryAgent,
   createTestRepositories,
@@ -18,11 +19,12 @@ import {
  * здесь важно пережить «перезапуск»: репозитории и БД остаются те же, а
  * раннер создаётся заново — как после падения процесса.
  */
-function buildEnv({ theoryAgent, transport, jobRepositoryOverrides } = {}) {
+function buildEnv({ theoryAgent, transport, jobRepositoryOverrides, progressNotifier } = {}) {
   const { db, chatRepository, jobRepository } = createTestRepositories();
   const conversation = chatRepository.getOrCreateConversation("telegram", "8123");
   const callbackTransport = transport ?? createFakeCallbackTransport();
   const runnerJobs = Object.assign(Object.create(jobRepository), jobRepositoryOverrides ?? {});
+  const fakeProgressNotifier = progressNotifier ?? createFakeProgressNotifier();
 
   const makeRunner = () =>
     new JobRunner({
@@ -39,6 +41,7 @@ function buildEnv({ theoryAgent, transport, jobRepositoryOverrides } = {}) {
         callbackUrls: { telegram: "http://adapter.test/callbacks/replies" },
         fetchImpl: callbackTransport.fetchImpl,
       }),
+      progressNotifier: fakeProgressNotifier,
       pollIntervalMs: 10,
       deliveryMaxAttempts: 3,
       deliveryBackoffMs: 20,
@@ -57,6 +60,7 @@ function buildEnv({ theoryAgent, transport, jobRepositoryOverrides } = {}) {
     jobRepository,
     conversation,
     delivered: callbackTransport.delivered,
+    progressCalls: fakeProgressNotifier.calls,
     makeRunner,
     enqueue,
     activeSession: () => chatRepository.getOrCreateActiveSession(conversation.id),
@@ -117,6 +121,35 @@ describe("JobRunner", () => {
         env.delivered.map((d) => d.payload.reply.text),
         ["эхо: первый", "эхо: второй"],
       );
+    });
+  });
+
+  describe("промежуточный статус", () => {
+    it("уведомляет о стадиях обработки с адресом диалога", async (t) => {
+      muteConsole(t);
+      const env = buildEnv();
+      env.enqueue("привет");
+
+      runUntil(t, env);
+      await waitFor(() => env.delivered.length === 1, { label: "ответ доставлен" });
+
+      assert.ok(env.progressCalls.length > 0, "хотя бы стадия маршрутизации отправлена");
+      assert.equal(env.progressCalls[0].conversation.adapter, "telegram");
+      assert.equal(env.progressCalls[0].conversation.externalId, "8123");
+      assert.equal(typeof env.progressCalls[0].jobId, "string");
+    });
+
+    it("без progressNotifier задание всё равно обрабатывается", async (t) => {
+      muteConsole(t);
+      // false — явно «раннер без уведомлений о прогрессе», в отличие от
+      // отсутствия опции вовсе (тогда buildEnv подставил бы заглушку).
+      const env = buildEnv({ progressNotifier: false });
+      const job = env.enqueue("привет");
+
+      runUntil(t, env);
+      await waitFor(() => env.delivered.length === 1, { label: "ответ доставлен" });
+
+      assert.equal(env.jobRepository.findById(job.id).status, JOB_STATUS.completed);
     });
   });
 

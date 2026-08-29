@@ -26,6 +26,24 @@ export const REJECT_REASON = {
 export const FAILURE_REASON = { internal: "internal_error" };
 
 /**
+ * Стадии обработки запроса — промежуточный статус для пользователя, пока
+ * задание выполняется в фоне. Наружу, как и с `REJECT_REASON`, уходит только
+ * код: конкретный текст и оформление — забота адаптера.
+ */
+export const PROGRESS_STAGE = {
+  /** Классификация запроса маршрутизатором. */
+  routing: "routing",
+  /** Ответ теоретического агента. */
+  answering: "answering",
+  /** Построение плана задачи. */
+  planning: "planning",
+  /** Выполнение шагов плана (сбор рыночных данных). */
+  executing: "executing",
+  /** Сведение отчёта по собранным данным. */
+  summarizing: "summarizing",
+};
+
+/**
  * Доменная логика диалога: классификация запроса, контекстное окно, история,
  * обращение к модели. Ничего не знает ни про Telegram, ни про HTTP, ни про
  * задания — на входе текст, на выходе исход.
@@ -67,7 +85,14 @@ export class DialogService {
   }
 
   /**
-   * @param {{ conversationId: number, text: string }} input
+   * @param {{
+   *   conversationId: number,
+   *   text: string,
+   *   onProgress?: (progress: { stage: string, [key: string]: unknown }) => void,
+   * }} input
+   *   `onProgress` — необязательный колбэк промежуточного статуса (см.
+   *   {@link PROGRESS_STAGE}); вызывается синхронно и не должен бросать —
+   *   доставка статуса пользователю не является частью гарантий задания.
    * @returns {Promise<{
    *   status: string,
    *   replyText?: string,
@@ -77,7 +102,7 @@ export class DialogService {
    *   historyEntry?: { sessionId: number, userText: string, assistantText: string, totalTokens: number },
    * }>}
    */
-  async process({ conversationId, text }) {
+  async process({ conversationId, text, onProgress }) {
     const session = this.chatRepository.getOrCreateActiveSession(conversationId);
 
     if (session.totalTokens >= this.contextWindowTokens) {
@@ -107,6 +132,7 @@ export class DialogService {
 
     let verdict;
     try {
+      onProgress?.({ stage: PROGRESS_STAGE.routing });
       verdict = await this.routerAgent.classify({ history, text });
       add(spent, verdict.usage);
     } catch (error) {
@@ -142,7 +168,7 @@ export class DialogService {
     }
 
     if (intent === ROUTER_INTENT.taskRequest) {
-      return this.#task({ session, history, text, spent });
+      return this.#task({ session, history, text, spent, onProgress });
     }
 
     // THEORY_QUESTION и разбор, который не удался: в обоих случаях отвечаем
@@ -151,6 +177,7 @@ export class DialogService {
 
     let result;
     try {
+      onProgress?.({ stage: PROGRESS_STAGE.answering });
       result = await this.theoryAgent.answer(messages);
     } catch (error) {
       return this.#llmFailure(error);
@@ -211,9 +238,10 @@ export class DialogService {
    * попадает в историю: следующий вопрос «а что по ETH» должен опираться на
    * то, что уже показано.
    */
-  async #task({ session, history, text, spent }) {
+  async #task({ session, history, text, spent, onProgress }) {
     let plan;
     try {
+      onProgress?.({ stage: PROGRESS_STAGE.planning });
       plan = await this.plannerAgent.plan({ history, text });
       add(spent, plan.usage);
     } catch (error) {
@@ -237,7 +265,10 @@ export class DialogService {
           };
     }
 
-    const execution = await this.planExecutor.run(plan.plan);
+    onProgress?.({ stage: PROGRESS_STAGE.executing, totalSteps: plan.plan.length });
+    const execution = await this.planExecutor.run(plan.plan, {
+      onStep: (step) => onProgress?.({ stage: PROGRESS_STAGE.executing, totalSteps: plan.plan.length, step }),
+    });
 
     if (execution.succeeded === 0) {
       // Ни один шаг не удался: показывать пустой отчёт с перечнем причин
@@ -250,7 +281,7 @@ export class DialogService {
       };
     }
 
-    const replyText = await this.#report({ text, plan, execution, spent });
+    const replyText = await this.#report({ text, plan, execution, spent, onProgress });
 
     return this.#reply({
       session,
@@ -269,7 +300,7 @@ export class DialogService {
    * получены и оплачены запросами к бирже, и показать их шаблоном куда лучше,
    * чем потерять всё из-за сбоя на последнем шаге.
    */
-  async #report({ text, plan, execution, spent }) {
+  async #report({ text, plan, execution, spent, onProgress }) {
     const fallback = () =>
       renderReport({
         taskSummary: plan.taskSummary,
@@ -280,6 +311,7 @@ export class DialogService {
     if (!this.summaryAgent) return fallback();
 
     try {
+      onProgress?.({ stage: PROGRESS_STAGE.summarizing });
       const summary = await this.summaryAgent.summarize({
         question: text,
         taskSummary: plan.taskSummary,

@@ -41,16 +41,20 @@ export function createCallbackServer({ path, onReply, authToken }) {
           return;
         }
 
-        // Повторная доставка того же задания — подтверждаем, но не дублируем
-        // сообщение в чате.
-        if (seenJobs.has(payload.jobId)) {
+        // Промежуточный статус ("прогресс") по одному jobId приходит много
+        // раз подряд — это не повторная доставка, а разные события. Защита
+        // от дублей нужна только терминальным статусам (доставка ответа
+        // повторяется Core при сбое, и вот её как раз нельзя проиграть дважды).
+        const isProgress = payload.status === "progress";
+
+        if (!isProgress && seenJobs.has(payload.jobId)) {
           sendJson(res, 200, { received: true, duplicate: true });
           return;
         }
 
         await onReply(payload);
 
-        remember(seenJobs, payload.jobId);
+        if (!isProgress) remember(seenJobs, payload.jobId);
         sendJson(res, 200, { received: true });
       })
       .catch((error) => {

@@ -1,4 +1,5 @@
 import { OllamaRunner } from "./OllamaRunner.js";
+import { LmStudioRunner } from "./LmStudioRunner.js";
 
 /** @typedef {import("./LlmRunner.js").LlmRunner} LlmRunner */
 
@@ -16,6 +17,8 @@ export function createLlmRunner(config) {
   switch (config.llmProvider) {
     case "ollama":
       return new OllamaRunner({ ...config.ollama, numCtx: config.contextWindowTokens });
+    case "lmstudio":
+      return new LmStudioRunner(config.lmstudio);
     default:
       throw new Error(`Неизвестный LLM_PROVIDER: "${config.llmProvider}"`);
   }

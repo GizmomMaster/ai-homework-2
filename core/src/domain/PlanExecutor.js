@@ -28,6 +28,17 @@ export class PlanExecutor {
 
   /**
    * @param {Array<{ action?: string, toolToUse: string, parameters?: object }>} plan
+   * @param {{
+   *   onStep?: (step: {
+   *     stepNumber: number,
+   *     totalSteps: number,
+   *     action: string,
+   *     ok: boolean,
+   *     completedCount: number,
+   *   }) => void,
+   * }} [options] `onStep` — промежуточный статус: вызывается по завершении
+   *   каждого шага, в порядке их фактического завершения (не порядке плана —
+   *   шаги идут параллельно). Не должен бросать: статус — не гарантия задания.
    * @returns {Promise<{
    *   steps: Array<{
    *     stepNumber: number,
@@ -41,8 +52,9 @@ export class PlanExecutor {
    *   failed: number,
    * }>}
    */
-  async run(plan) {
+  async run(plan, { onStep } = {}) {
     const startedAt = Date.now();
+    let completedCount = 0;
 
     const steps = await mapWithConcurrency(plan, CONCURRENCY, async (step, index) => {
       const stepStartedAt = Date.now();
@@ -54,12 +66,23 @@ export class PlanExecutor {
           `${outcome.ok ? "готово" : `отказ (${outcome.error.code})`} за ${took} мс.`,
       );
 
-      return {
+      const result = {
         stepNumber: index + 1,
         action: step.action ?? step.toolToUse,
         tool: step.toolToUse,
         ...(outcome.ok ? { ok: true, value: outcome.value } : { ok: false, error: outcome.error }),
       };
+
+      completedCount += 1;
+      onStep?.({
+        stepNumber: result.stepNumber,
+        totalSteps: plan.length,
+        action: result.action,
+        ok: result.ok,
+        completedCount,
+      });
+
+      return result;
     });
 
     const succeeded = steps.filter((s) => s.ok).length;

@@ -111,6 +111,28 @@ describe("реестр команд", () => {
       assert.equal(ctx.coreClient.resets.length, 0);
       assert.equal(ctx.coreClient.sentMessages.length, 0);
     });
+
+    it("описывает, для кого проект и что он умеет и не умеет", async (t) => {
+      muteConsole(t);
+      const ctx = context();
+
+      await findCommand("/help").handle(ctx);
+
+      const text = ctx.telegramClient.lastText();
+      assert.match(text, /криптотрейдер/i, "для кого — сказано явно");
+      assert.match(text, /умею/i, "что умеет — раздел есть");
+      assert.match(text, /не умею|не торгую/i, "ограничения — раздел есть");
+    });
+
+    it("отправляет HTML-разметку, а не сырой markdown", async (t) => {
+      muteConsole(t);
+      const ctx = context();
+
+      await findCommand("/help").handle(ctx);
+
+      assert.equal(ctx.telegramClient.sent[0].parseMode, "HTML");
+      assert.doesNotMatch(ctx.telegramClient.lastText(), /\*\*/, "** не должно остаться в тексте");
+    });
   });
 
   describe("/start", () => {
@@ -122,6 +144,19 @@ describe("реестр команд", () => {
 
       assert.match(ctx.telegramClient.lastText(), /привет/i);
       assert.deepEqual(ctx.coreClient.resets, [{ chatId: 8123 }]);
+    });
+
+    it("содержит примеры запросов, которые можно отправить", async (t) => {
+      muteConsole(t);
+      const ctx = context();
+
+      await findCommand("/start").handle(ctx);
+
+      const text = ctx.telegramClient.lastText();
+      // Хотя бы один пример — реальный вопрос с вопросительным знаком,
+      // а не просто перечисление возможностей.
+      assert.match(text, /\?/);
+      assert.match(text, /BTC|ETH|SOL/i, "пример называет конкретный актив");
     });
   });
 });
