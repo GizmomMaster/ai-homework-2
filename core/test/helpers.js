@@ -14,8 +14,9 @@ export function testConfig(overrides = {}) {
     maxBodyBytes: 64 * 1024,
     sqlitePath: ":memory:",
     contextWindowTokens: 1000,
-    llmProvider: "ollama",
+    llmProvider: "lmstudio",
     ollama: { baseUrl: "http://ollama.test", model: "test-model", timeoutMs: 1000 },
+    lmstudio: { baseUrl: "http://lmstudio.test", model: "test-model", timeoutMs: 1000 },
     tools: { binanceBaseUrl: "http://binance.test", timeoutMs: 500 },
     jobs: {
       pollIntervalMs: 10,

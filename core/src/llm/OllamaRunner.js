@@ -1,20 +1,10 @@
 import { LLM_ERROR, LlmError, THINK_OMIT } from "./LlmRunner.js";
+import { stripThinking } from "./stripThinking.js";
 
 /** @typedef {import("./LlmRunner.js").LlmRunner} LlmRunner */
 /** @typedef {import("./LlmRunner.js").ChatMessage} ChatMessage */
 /** @typedef {import("./LlmRunner.js").ChatOptions} ChatOptions */
 /** @typedef {import("./LlmRunner.js").ChatResult} ChatResult */
-
-/**
- * Блок размышлений reasoning-модели. Ollama отдаёт его отдельным полем
- * `message.thinking` только начиная с 0.9 и только при `think: true`; во всех
- * остальных случаях (старая версия, ручной `/no_think`, усечённая генерация)
- * он приезжает прямо в тексте ответа. Вырезаем сами, чтобы размышления модели
- * не ушли пользователю и не попали в историю диалога.
- */
-const THINK_BLOCK = /<think>[\s\S]*?<\/think>/gi;
-/** Незакрытый блок: генерация оборвалась на середине размышления. */
-const UNCLOSED_THINK = /<think>[\s\S]*$/i;
 
 /**
  * Реализация LlmRunner поверх Ollama HTTP API (эндпоинт /api/chat).
@@ -125,9 +115,4 @@ export class OllamaRunner {
       completionTokens: data.eval_count ?? 0,
     };
   }
-}
-
-/** Убирает блоки размышления из текста ответа модели. */
-export function stripThinking(content) {
-  return content.replace(THINK_BLOCK, "").replace(UNCLOSED_THINK, "").trim();
 }

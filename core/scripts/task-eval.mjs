@@ -20,14 +20,16 @@
  *   node scripts/task-eval.mjs --execute
  *
  * Флаги:
+ *   --provider=ollama|lmstudio  раннер (по умолчанию LLM_PROVIDER из .env)
  *   --model=…      модель (по умолчанию из .env)
- *   --base-url=…   адрес Ollama (по умолчанию из .env)
+ *   --base-url=…   адрес сервера модели (по умолчанию из .env)
  *   --runs=N       прогонов каждой задачи (по умолчанию 1)
  *   --execute      ещё и выполнить планы на настоящей бирже
  *   --verbose      печатать план целиком по каждому промаху
  */
 import { config } from "../src/config.js";
 import { OllamaRunner } from "../src/llm/OllamaRunner.js";
+import { LmStudioRunner } from "../src/llm/LmStudioRunner.js";
 import { LLM_ERROR } from "../src/llm/LlmRunner.js";
 import { PlannerAgent } from "../src/agents/PlannerAgent.js";
 import { PlanExecutor } from "../src/domain/PlanExecutor.js";
@@ -99,6 +101,9 @@ function parseArgs(argv) {
     else if (key === "base-url") args.baseUrl = value;
     else args[key] = value;
   }
+  if (args.provider && !["ollama", "lmstudio"].includes(args.provider)) {
+    throw new Error("--provider: ожидается ollama или lmstudio");
+  }
   if (!Number.isInteger(args.runs) || args.runs < 1) throw new Error("--runs: целое ≥ 1");
   return args;
 }
@@ -125,16 +130,21 @@ function pct(part, total) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const model = args.model ?? config.ollama.model;
-  const baseUrl = args.baseUrl ?? config.ollama.baseUrl;
+  const provider = args.provider ?? config.llmProvider;
+  const providerConfig = config[provider];
+  const model = args.model ?? providerConfig.model;
+  const baseUrl = args.baseUrl ?? providerConfig.baseUrl;
 
-  const llmRunner = new OllamaRunner({
-    baseUrl,
-    model,
-    timeoutMs: config.ollama.timeoutMs,
-    think: config.ollama.think,
-    numCtx: 8192,
-  });
+  const llmRunner =
+    provider === "ollama"
+      ? new OllamaRunner({
+          baseUrl,
+          model,
+          timeoutMs: providerConfig.timeoutMs,
+          think: providerConfig.think,
+          numCtx: 8192,
+        })
+      : new LmStudioRunner({ baseUrl, model, timeoutMs: providerConfig.timeoutMs });
 
   // Два реестра: один с настоящим клиентом для --execute, другой с заведомо
   // недоступным адресом — по нему проверяются только параметры.
@@ -149,7 +159,7 @@ async function main() {
   const executor = new PlanExecutor({ tools });
 
   console.log(
-    `Модель: ${model}   Ollama: ${baseUrl}\n` +
+    `Модель: ${model}   ${provider}: ${baseUrl}\n` +
       `Задач: ${CASES.length}, прогонов: ${args.runs}` +
       `${args.execute ? ", с выполнением на бирже" : ""}\n`,
   );

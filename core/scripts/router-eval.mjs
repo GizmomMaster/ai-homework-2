@@ -12,15 +12,17 @@
  * поведение модели. Повтор при невалидном JSON — уже часть боевого кода, и
  * добавлять его надо после того, как станет известна база.
  *
- * Core для этого запускать не нужно — скрипт обращается к Ollama напрямую.
- * Но настройки он берёт те же, из core/.env, поэтому при запуске в обход
- * контейнера следите за OLLAMA_BASE_URL: host.docker.internal резолвится
- * только изнутри контейнера, снаружи нужен localhost (или --base-url).
+ * Core для этого запускать не нужно — скрипт обращается к модели напрямую,
+ * через тот же раннер, что и Core (Ollama или LM Studio). Но настройки он
+ * берёт те же, из core/.env, поэтому при запуске в обход контейнера следите
+ * за адресом: host.docker.internal резолвится только изнутри контейнера,
+ * снаружи нужен localhost (или --base-url).
  *
  * Запуск:
  *   node scripts/router-eval.mjs
  *   node scripts/router-eval.mjs --lang=en --format=schema
  *   node scripts/router-eval.mjs --format=none --runs=3
+ *   node scripts/router-eval.mjs --provider=ollama --model=qwen3:8b
  *
  * Флаги:
  *   --lang=ru|en          язык системного промпта (по умолчанию ru)
@@ -30,9 +32,12 @@
  *                         (по умолчанию, выиграл по замеру);
  *                         v1 — промпт из спецификации дословно
  *   --runs=N              прогонов каждого случая (по умолчанию 1)
- *   --model=…             модель (по умолчанию из .env / OLLAMA_MODEL)
- *   --base-url=…          адрес Ollama (по умолчанию из .env)
- *   --think=false|true|omit     режим размышления (по умолчанию из .env)
+ *   --provider=ollama|lmstudio  раннер (по умолчанию LLM_PROVIDER из .env)
+ *   --model=…             модель (по умолчанию OLLAMA_MODEL/LMSTUDIO_MODEL
+ *                         из .env — смотря какой провайдер)
+ *   --base-url=…          адрес сервера модели (по умолчанию из .env)
+ *   --think=false|true|omit     режим размышления, только для --provider=ollama
+ *                         (по умолчанию из .env)
  *   --temperature=N       температура сэмплирования (по умолчанию 0 — от
  *                         классификатора нужен воспроизводимый ответ, а не
  *                         выборка из распределения)
@@ -40,6 +45,7 @@
  */
 import { config } from "../src/config.js";
 import { OllamaRunner } from "../src/llm/OllamaRunner.js";
+import { LmStudioRunner } from "../src/llm/LmStudioRunner.js";
 import { LLM_ERROR } from "../src/llm/LlmRunner.js";
 import { ROUTER_PROMPT, ROUTER_SCHEMA, ROUTER_INTENT } from "../src/agents/RouterAgent.js";
 
@@ -192,6 +198,9 @@ function parseArgs(argv) {
     throw new Error(`--format: ожидается schema, json или none`);
   }
   if (!["v1", "v2"].includes(args.prompt)) throw new Error(`--prompt: ожидается v1 или v2`);
+  if (args.provider && !["ollama", "lmstudio"].includes(args.provider)) {
+    throw new Error(`--provider: ожидается ollama или lmstudio`);
+  }
   if (!Number.isInteger(args.runs) || args.runs < 1) throw new Error(`--runs: целое ≥ 1`);
   if (!Number.isFinite(args.temperature) || args.temperature < 0) {
     throw new Error(`--temperature: неотрицательное число`);
@@ -233,27 +242,33 @@ function pct(part, total) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const model = args.model ?? config.ollama.model;
-  const baseUrl = args.baseUrl ?? config.ollama.baseUrl;
-  const think = args.think ?? config.ollama.think;
+  const provider = args.provider ?? config.llmProvider;
+  const providerConfig = config[provider];
+  const model = args.model ?? providerConfig.model;
+  const baseUrl = args.baseUrl ?? providerConfig.baseUrl;
+  const think = provider === "ollama" ? (args.think ?? providerConfig.think) : undefined;
   // Скрипт читает те же настройки, что и Core, поэтому адрес может приехать из
   // core/.env — например `host.docker.internal`, годный только внутри
   // контейнера. Показываем источник, чтобы не гадать, откуда взялся адрес.
+  const baseUrlEnvVar = provider === "ollama" ? "OLLAMA_BASE_URL" : "LMSTUDIO_BASE_URL";
   const baseUrlSource = args.baseUrl
     ? "флаг --base-url"
-    : process.env.OLLAMA_BASE_URL
-      ? "OLLAMA_BASE_URL из core/.env"
+    : process.env[baseUrlEnvVar]
+      ? `${baseUrlEnvVar} из core/.env`
       : "значение по умолчанию";
 
-  const runner = new OllamaRunner({
-    baseUrl,
-    model,
-    timeoutMs: config.ollama.timeoutMs,
-    think,
-    // Контекст маршрутизатора — системный промпт плюс одна реплика; полное
-    // окно диалога здесь только зря занимало бы память.
-    numCtx: 4096,
-  });
+  const runner =
+    provider === "ollama"
+      ? new OllamaRunner({
+          baseUrl,
+          model,
+          timeoutMs: providerConfig.timeoutMs,
+          think,
+          // Контекст маршрутизатора — системный промпт плюс одна реплика;
+          // полное окно диалога здесь только зря занимало бы память.
+          numCtx: 4096,
+        })
+      : new LmStudioRunner({ baseUrl, model, timeoutMs: providerConfig.timeoutMs });
 
   const format =
     args.format === "schema" ? ROUTER_SCHEMA : args.format === "json" ? "json" : undefined;
@@ -270,9 +285,9 @@ async function main() {
         : PROMPT_RU;
 
   console.log(
-    `Модель: ${model}   Ollama: ${baseUrl}  (${baseUrlSource})\n` +
+    `Модель: ${model}   ${provider}: ${baseUrl}  (${baseUrlSource})\n` +
       `Промпт: ${args.lang}/${args.prompt}   format: ${args.format}   ` +
-      `think: ${think}   t°: ${args.temperature}   прогонов: ${args.runs}\n` +
+      `think: ${think ?? "н/д"}   t°: ${args.temperature}   прогонов: ${args.runs}\n` +
       `Случаев: ${CASES.length}, всего запросов: ${CASES.length * args.runs}\n`,
   );
 
@@ -312,14 +327,15 @@ async function main() {
         content = result.content;
         stats.completionTokens.push(result.completionTokens);
       } catch (error) {
-        // Недоступная Ollama — не результат замера, а неверная настройка:
+        // Недоступная модель — не результат замера, а неверная настройка:
         // перебирать ради неё оставшиеся случаи бессмысленно.
         if (error.code === LLM_ERROR.unavailable) {
+          const defaultUrl = provider === "ollama" ? "http://localhost:11434" : "http://localhost:1234";
           throw new Error(
             `${error.message}\n\n` +
               `Адрес взят: ${baseUrlSource}. Имя host.docker.internal работает только\n` +
               `изнутри контейнера — скрипт запускается напрямую, поэтому нужен localhost.\n` +
-              `Переопределить, не трогая .env: --base-url=http://localhost:11434`,
+              `Переопределить, не трогая .env: --base-url=${defaultUrl}`,
           );
         }
         outcomes.push(`ОШИБКА: ${error.code ?? error.name}`);

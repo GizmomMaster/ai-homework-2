@@ -70,20 +70,32 @@ export const config = {
 
   sqlitePath: resolveFromProjectRoot(process.env.SQLITE_DB_PATH || "./data/core.db"),
   /**
-   * Бюджет диалога в токенах. Передаётся модели как num_ctx, поэтому упирается
-   * не только в нативное окно модели (у qwen3:8b — 32768), но и в память:
-   * KV-кеш у неё около 144 КиБ на токен, то есть 16000 токенов стоят ~2.3 ГБ
-   * поверх ~5 ГБ весов. Полные 32768 добавили бы ещё столько же и на карте с
-   * 12 ГБ шли бы впритык.
+   * Бюджет диалога в токенах: при достижении лимита Core отвечает отказом
+   * context_limit вместо того, чтобы молча обрезать историю. У Ollama это
+   * значение ещё и передаётся модели как num_ctx (см. OllamaRunner) — там
+   * оно упирается не только в нативное окно модели, но и в память под
+   * KV-кеш. У LM Studio раннер num_ctx не передаёт: там длину контекста
+   * задают при загрузке модели в самом приложении, и её нужно выставить не
+   * меньше этого значения отдельно — см. LMSTUDIO_* в core/.env.example.
    */
   contextWindowTokens: positiveInt("CONTEXT_WINDOW_TOKENS", 16000),
 
-  llmProvider: process.env.LLM_PROVIDER || "ollama",
+  llmProvider: process.env.LLM_PROVIDER || "lmstudio",
   ollama: {
     baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
     model: process.env.OLLAMA_MODEL || "qwen3:8b",
     timeoutMs: positiveInt("OLLAMA_TIMEOUT_MS", 120000),
     think: thinkMode("OLLAMA_THINK", false),
+  },
+  /**
+   * У LM Studio нет запросного аналога num_ctx: длина контекста задаётся при
+   * загрузке модели в самом LM Studio, а не в теле запроса, поэтому здесь
+   * этого поля нет — см. LmStudioRunner и LMSTUDIO_* в core/.env.example.
+   */
+  lmstudio: {
+    baseUrl: process.env.LMSTUDIO_BASE_URL || "http://localhost:1234",
+    model: process.env.LMSTUDIO_MODEL || "bonsai-27b",
+    timeoutMs: positiveInt("LMSTUDIO_TIMEOUT_MS", 120000),
   },
 
   /**

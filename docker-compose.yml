@@ -14,8 +14,9 @@ services:
     volumes:
       # История диалогов и очередь заданий переживают пересоздание контейнера.
       - ./core/data:/app/data
-    # Позволяет контейнеру достучаться до Ollama, запущенной на хосте, по имени
-    # host.docker.internal (нужно для Linux; на Docker Desktop работает само).
+    # Позволяет контейнеру достучаться до локальной LLM (LM Studio, Ollama),
+    # запущенной на хосте, по имени host.docker.internal (нужно для Linux;
+    # на Docker Desktop работает само).
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
