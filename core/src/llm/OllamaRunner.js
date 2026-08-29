@@ -1,5 +1,25 @@
 import { LLM_ERROR, LlmError, THINK_OMIT } from "./LlmRunner.js";
+import { badResponseMessage } from "./badResponse.js";
 import { stripThinking } from "./stripThinking.js";
+
+/**
+ * Догадка о причине нечитаемого ответа Ollama. Тело ответа и размер запроса
+ * едут рядом, см. {@link badResponseMessage}.
+ */
+export function diagnoseOllama(data) {
+  if (data?.error !== undefined) {
+    return "Ollama вернула ошибку в теле ответа при статусе 200.";
+  }
+  // Ollama сообщает причину остановки отдельным полем, и «length» здесь
+  // означает, что генерация упёрлась в предел, а не завершилась сама.
+  if (data?.done_reason === "length") {
+    return "Генерация оборвана по длине (done_reason=length) — промпт или ответ не помещаются в num_ctx.";
+  }
+  if (data?.message && data.message.content === null) {
+    return "Поле message.content пустое (null).";
+  }
+  return "В ответе нет message.content.";
+}
 
 /** @typedef {import("./LlmRunner.js").LlmRunner} LlmRunner */
 /** @typedef {import("./LlmRunner.js").ChatMessage} ChatMessage */
@@ -95,7 +115,16 @@ export class OllamaRunner {
 
     const data = await response.json();
     if (!data.message || typeof data.message.content !== "string") {
-      throw new LlmError(LLM_ERROR.badResponse, "Некорректный формат ответа от Ollama.");
+      throw new LlmError(
+        LLM_ERROR.badResponse,
+        badResponseMessage({
+          vendor: "Ollama",
+          hint: diagnoseOllama(data),
+          data,
+          messages,
+          format,
+        }),
+      );
     }
 
     const content = stripThinking(data.message.content);
@@ -105,7 +134,15 @@ export class OllamaRunner {
       // размышление и не дошла до ответа.
       throw new LlmError(
         LLM_ERROR.badResponse,
-        "Модель вернула пустой ответ (возможно, генерация ушла целиком в блок размышления).",
+        badResponseMessage({
+          vendor: "Ollama",
+          hint:
+            "Модель вернула пустой ответ — возможно, генерация ушла целиком в блок " +
+            `размышления. Сгенерировано токенов: ${data.eval_count ?? "неизвестно"}.`,
+          data,
+          messages,
+          format,
+        }),
       );
     }
 

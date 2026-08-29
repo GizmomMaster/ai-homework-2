@@ -267,6 +267,28 @@ describe("OllamaRunner", () => {
       });
     });
 
+    describe("подробности в сообщении", () => {
+      it("прикладывает тело ответа и размер запроса", async () => {
+        const runner = await connect(() => ({ json: { unexpected: "нечто" } }));
+
+        await assert.rejects(() => runner.chat(messages), (error) => {
+          assert.match(error.message, /"unexpected":"нечто"/);
+          assert.match(error.message, /знаков/);
+          return true;
+        });
+      });
+
+      it("узнаёт обрыв по длине контекста", async () => {
+        const runner = await connect(() => ({ json: { done_reason: "length" } }));
+
+        await assert.rejects(() => runner.chat(messages), (error) => {
+          assert.match(error.message, /done_reason=length/);
+          assert.match(error.message, /num_ctx/);
+          return true;
+        });
+      });
+    });
+
     it("недоступный сервер → код llm_unavailable с подсказкой", async () => {
       const runner = new OllamaRunner({ baseUrl: "http://127.0.0.1:1", model: "test-model" });
 
