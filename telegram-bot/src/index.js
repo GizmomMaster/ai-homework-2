@@ -4,6 +4,7 @@ import { startPolling } from "./telegram/polling.js";
 import { CoreClient } from "./core/CoreClient.js";
 import { createCallbackServer } from "./http/callbackServer.js";
 import { handleReply } from "./handlers/replyHandler.js";
+import { createProgressTracker } from "./handlers/progressHandler.js";
 import { commandMenu } from "./handlers/commands.js";
 import { log, logError } from "./logger.js";
 
@@ -12,12 +13,19 @@ const telegramClient = new TelegramClient(config.telegramBotToken, {
 });
 const coreClient = new CoreClient(config.core);
 
+const progressTracker = createProgressTracker({ telegramClient });
+
 // Сервер для готовых ответов от Core. Поднимаем до старта polling: иначе
 // первый же ответ мог бы прийти в закрытый порт.
 const callbackServer = createCallbackServer({
   path: config.callback.path,
   authToken: config.callback.authToken,
-  onReply: (payload) => handleReply({ payload, telegramClient }),
+  // Промежуточный статус ("прогресс") показываем отдельным обработчиком —
+  // это не ответ пользователю, а обновление статусного сообщения.
+  onReply: (payload) =>
+    payload.status === "progress"
+      ? progressTracker.handle(payload)
+      : handleReply({ payload, telegramClient, progressTracker }),
 });
 
 await new Promise((resolve, reject) => {

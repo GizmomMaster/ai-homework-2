@@ -112,6 +112,73 @@ describe("TelegramClient", () => {
         /bot was blocked/,
       );
     });
+
+    it("возвращает объект отправленного сообщения (для правки/удаления статуса)", async () => {
+      ctx = await connectClient(() => ({ json: { ok: true, result: { message_id: 42 } } }));
+
+      const result = await ctx.client.sendMessage({ chatId: 5, text: "статус" });
+
+      assert.equal(result.message_id, 42);
+    });
+  });
+
+  describe("editMessageText", () => {
+    it("отправляет chat_id, message_id и новый текст", async () => {
+      ctx = await connectClient(() => okResponse);
+
+      await ctx.client.editMessageText({ chatId: 5, messageId: 42, text: "новый статус" });
+
+      assert.equal(ctx.server.requests[0].url, "/botTEST_TOKEN/editMessageText");
+      assert.deepEqual(ctx.server.requests[0].payload, {
+        chat_id: 5,
+        message_id: 42,
+        text: "новый статус",
+      });
+    });
+
+    it("передаёт parse_mode, когда он указан", async () => {
+      ctx = await connectClient(() => okResponse);
+
+      await ctx.client.editMessageText({
+        chatId: 5,
+        messageId: 42,
+        text: "<b>статус</b>",
+        parseMode: "HTML",
+      });
+
+      assert.equal(ctx.server.requests[0].payload.parse_mode, "HTML");
+    });
+
+    it("пробрасывает ошибку API", async (t) => {
+      muteConsole(t);
+      ctx = await connectClient(() => ({ json: { ok: false, description: "message not found" } }));
+
+      await assert.rejects(
+        () => ctx.client.editMessageText({ chatId: 5, messageId: 42, text: "текст" }),
+        /message not found/,
+      );
+    });
+  });
+
+  describe("deleteMessage", () => {
+    it("отправляет chat_id и message_id", async () => {
+      ctx = await connectClient(() => okResponse);
+
+      await ctx.client.deleteMessage({ chatId: 5, messageId: 42 });
+
+      assert.equal(ctx.server.requests[0].url, "/botTEST_TOKEN/deleteMessage");
+      assert.deepEqual(ctx.server.requests[0].payload, { chat_id: 5, message_id: 42 });
+    });
+
+    it("пробрасывает ошибку API", async (t) => {
+      muteConsole(t);
+      ctx = await connectClient(() => ({ json: { ok: false, description: "message to delete not found" } }));
+
+      await assert.rejects(
+        () => ctx.client.deleteMessage({ chatId: 5, messageId: 42 }),
+        /message to delete not found/,
+      );
+    });
   });
 
   describe("getUpdates", () => {

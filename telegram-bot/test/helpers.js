@@ -2,15 +2,33 @@ import http from "node:http";
 
 /**
  * Заглушка TelegramClient: запоминает отправленное вместо похода в сеть.
+ * `sendMessage` возвращает `{ message_id }`, как настоящий клиент, — этого
+ * достаточно, чтобы код, который потом редактирует или удаляет статусное
+ * сообщение, отработал без обращения к сети.
  * @param {{ failSendMessage?: boolean }} [options]
  */
 export function createFakeTelegramClient({ failSendMessage = false } = {}) {
   const sent = [];
+  const edited = [];
+  const deleted = [];
+  let nextMessageId = 1;
+
   return {
     sent,
+    edited,
+    deleted,
     async sendMessage({ chatId, text, parseMode }) {
       if (failSendMessage) throw new Error("Telegram недоступен");
+      const messageId = nextMessageId;
+      nextMessageId += 1;
       sent.push({ chatId, text, parseMode });
+      return { message_id: messageId };
+    },
+    async editMessageText({ chatId, messageId, text, parseMode }) {
+      edited.push({ chatId, messageId, text, parseMode });
+    },
+    async deleteMessage({ chatId, messageId }) {
+      deleted.push({ chatId, messageId });
     },
     lastText: () => sent[sent.length - 1]?.text,
     texts: () => sent.map((m) => m.text),

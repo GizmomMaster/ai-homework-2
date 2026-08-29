@@ -101,6 +101,48 @@ describe("callbackServer", () => {
     });
   });
 
+  describe("промежуточный статус (progress)", () => {
+    const progressPayload = {
+      jobId: "j_1",
+      adapter: "telegram",
+      externalId: "8123",
+      status: "progress",
+      progress: { stage: "planning" },
+    };
+
+    it("несколько статусов с одним jobId не считаются повтором", async () => {
+      server = await startServer();
+
+      await server.post(progressPayload);
+      await server.post({ ...progressPayload, progress: { stage: "executing" } });
+      await server.post({ ...progressPayload, progress: { stage: "summarizing" } });
+
+      assert.equal(server.received.length, 3, "каждый статус обработан");
+    });
+
+    it("статус после терминального доставляется, а не считается повтором", async () => {
+      server = await startServer();
+
+      await server.post(completedPayload);
+      const response = await server.post(progressPayload);
+
+      assert.equal(response.status, 200);
+      assert.equal(response.json.duplicate, undefined);
+      assert.equal(server.received.length, 2);
+    });
+
+    it("терминальный статус после статусов задания дедуплицируется как обычно", async () => {
+      server = await startServer();
+
+      await server.post(progressPayload);
+      await server.post(completedPayload);
+      const repeat = await server.post(completedPayload);
+
+      assert.equal(repeat.json.duplicate, true);
+      assert.equal(server.received.length, 2, "прогресс + один терминальный");
+    });
+  });
+
   describe("ошибки", () => {
     it("отвечает 500, если сообщение не удалось отправить — Core повторит", async (t) => {
       muteConsole(t);

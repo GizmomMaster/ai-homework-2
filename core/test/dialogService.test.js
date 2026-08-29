@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { DialogService, FAILURE_REASON, REJECT_REASON } from "../src/domain/DialogService.js";
+import { DialogService, FAILURE_REASON, PROGRESS_STAGE, REJECT_REASON } from "../src/domain/DialogService.js";
 import { LLM_ERROR, LlmError } from "../src/llm/LlmRunner.js";
 import {
   createFakeExecutor,
@@ -41,7 +41,8 @@ function setup({ reply, verdict, plan, execution, summary, contextWindowTokens =
     summaryAgent,
     service,
     conversationId: conversation.id,
-    process: (text) => service.process({ conversationId: conversation.id, text }),
+    process: (text, options) =>
+      service.process({ conversationId: conversation.id, text, ...options }),
     /** Записывает исход в историю так же, как это делает JobRunner. */
     commit(outcome) {
       if (!outcome.historyEntry) return;
@@ -541,6 +542,96 @@ describe("DialogService", () => {
         ctx.chatRepository.getOrCreateActiveSession(ctx.conversationId).totalTokens,
         0,
       );
+    });
+  });
+
+  describe("промежуточный статус (onProgress)", () => {
+    it("теоретический вопрос: маршрутизация, потом ответ", async () => {
+      const ctx = setup({ verdict: { intent: ROUTER_INTENT.theoryQuestion } });
+      const stages = [];
+
+      await ctx.process("что такое funding rate?", { onProgress: (p) => stages.push(p.stage) });
+
+      assert.deepEqual(stages, [PROGRESS_STAGE.routing, PROGRESS_STAGE.answering]);
+    });
+
+    it("отказ вне компетенции: только маршрутизация, дальше не идём", async () => {
+      const ctx = setup({ verdict: { intent: ROUTER_INTENT.outOfScope } });
+      const stages = [];
+
+      await ctx.process("напиши стих", { onProgress: (p) => stages.push(p.stage) });
+
+      assert.deepEqual(stages, [PROGRESS_STAGE.routing]);
+    });
+
+    it("уточнение: только маршрутизация — модель второй раз не зовём", async () => {
+      const ctx = setup({
+        verdict: {
+          intent: ROUTER_INTENT.clarificationNeeded,
+          clarificationQuestion: "О какой монете идёт речь?",
+        },
+      });
+      const stages = [];
+
+      await ctx.process("какая цена?", { onProgress: (p) => stages.push(p.stage) });
+
+      assert.deepEqual(stages, [PROGRESS_STAGE.routing]);
+    });
+
+    it("задача: маршрутизация, план, выполнение (с шагом), сводка", async () => {
+      const ctx = setup({
+        verdict: { intent: ROUTER_INTENT.taskRequest },
+        plan: {
+          canExecute: true,
+          taskSummary: "Цена BTC",
+          plan: [{ action: "Цена", toolToUse: "get_crypto_current_price", parameters: {} }],
+        },
+        execution: () => ({ ok: true, value: { price: 1 } }),
+      });
+      const events = [];
+
+      await ctx.process("цена BTC?", { onProgress: (p) => events.push(p) });
+
+      assert.deepEqual(
+        events.map((e) => e.stage),
+        [
+          PROGRESS_STAGE.routing,
+          PROGRESS_STAGE.planning,
+          PROGRESS_STAGE.executing,
+          PROGRESS_STAGE.executing,
+          PROGRESS_STAGE.summarizing,
+        ],
+      );
+      // Первое "executing" — общий счёт шагов, второе — сам завершившийся шаг.
+      assert.equal(events[2].totalSteps, 1);
+      assert.equal(events[3].step.action, "Цена");
+      assert.equal(events[3].step.stepNumber, 1);
+    });
+
+    it("невыполнимая задача: до выполнения и сводки не доходит", async () => {
+      const ctx = setup({
+        verdict: { intent: ROUTER_INTENT.taskRequest },
+        plan: { canExecute: false, fallbackMessage: "не умею" },
+      });
+      const stages = [];
+
+      await ctx.process("купи BTC", { onProgress: (p) => stages.push(p.stage) });
+
+      assert.deepEqual(stages, [PROGRESS_STAGE.routing, PROGRESS_STAGE.planning]);
+    });
+
+    it("без сводящего агента стадия summarizing не сообщается", async () => {
+      const ctx = setup({
+        verdict: { intent: ROUTER_INTENT.taskRequest },
+        plan: { canExecute: true, taskSummary: "Т", plan: [{ action: "A", toolToUse: "t" }] },
+        execution: () => ({ ok: true, value: {} }),
+        summary: null,
+      });
+      const stages = [];
+
+      await ctx.process("сравни", { onProgress: (p) => stages.push(p.stage) });
+
+      assert.ok(!stages.includes(PROGRESS_STAGE.summarizing));
     });
   });
 

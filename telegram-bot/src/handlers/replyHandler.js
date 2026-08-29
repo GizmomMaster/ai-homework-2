@@ -73,9 +73,16 @@ function failureText({ reason }) {
  * @param {{
  *   payload: object,
  *   telegramClient: import("../telegram/client.js").TelegramClient,
+ *   progressTracker?: ReturnType<typeof import("./progressHandler.js").createProgressTracker>,
  * }} params
+ *   `progressTracker` — убирает статусное сообщение обработки, если оно
+ *   было показано пользователю (см. progressHandler.js).
  */
-export async function handleReply({ payload, telegramClient }) {
+export async function handleReply({ payload, telegramClient, progressTracker }) {
+  // Пришёл окончательный исход — статусное сообщение («Строю план...» и
+  // т.п.), если оно есть, больше не нужно.
+  await progressTracker?.finish(payload.jobId);
+
   const chatId = payload.externalId;
 
   if (payload.status === "completed") {

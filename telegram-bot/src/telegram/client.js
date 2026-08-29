@@ -60,22 +60,50 @@ export class TelegramClient {
    * @param {{ chatId: number|string, text: string, parseMode?: "HTML" }} params
    *   `text` уже должен быть в формате `parseMode` (например, HTML-разметка
    *   Telegram, если указан `parseMode: "HTML"`).
+   * @returns {Promise<object>} результат Telegram API для **последней**
+   *   отправленной части (объект сообщения с `message_id`) — этого достаточно,
+   *   чтобы потом отредактировать или удалить статусное сообщение, которое
+   *   всегда укладывается в одну часть.
    */
   async sendMessage({ chatId, text, parseMode }) {
     const chunks = splitIntoChunks(text, TELEGRAM_MESSAGE_LIMIT);
+    let result;
     for (const chunk of chunks) {
-      await this.#sendChunk(chatId, chunk, parseMode);
+      result = await this.#sendChunk(chatId, chunk, parseMode);
     }
+    return result;
+  }
+
+  /**
+   * Редактирует уже отправленное сообщение — используется для обновления
+   * статуса обработки на месте, без спама новыми сообщениями в чат.
+   * @param {{ chatId: number|string, messageId: number, text: string, parseMode?: "HTML" }} params
+   */
+  async editMessageText({ chatId, messageId, text, parseMode }) {
+    return this.#call("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      ...(parseMode ? { parse_mode: parseMode } : {}),
+    });
+  }
+
+  /**
+   * Удаляет сообщение — используется, чтобы убрать статусное сообщение,
+   * когда пришёл окончательный ответ.
+   * @param {{ chatId: number|string, messageId: number }} params
+   */
+  async deleteMessage({ chatId, messageId }) {
+    return this.#call("deleteMessage", { chat_id: chatId, message_id: messageId });
   }
 
   async #sendChunk(chatId, text, parseMode) {
     if (!parseMode) {
-      await this.#call("sendMessage", { chat_id: chatId, text });
-      return;
+      return this.#call("sendMessage", { chat_id: chatId, text });
     }
 
     try {
-      await this.#call("sendMessage", { chat_id: chatId, text, parse_mode: parseMode });
+      return await this.#call("sendMessage", { chat_id: chatId, text, parse_mode: parseMode });
     } catch (error) {
       // Разметка могла не распарситься (например, теги оказались разорваны
       // при нарезке на части) — не теряем сообщение, а отправляем как есть.
@@ -83,7 +111,7 @@ export class TelegramClient {
         `[chat ${chatId}] Не удалось отправить сообщение с parse_mode=${parseMode}, отправляю как обычный текст:`,
         error,
       );
-      await this.#call("sendMessage", { chat_id: chatId, text });
+      return this.#call("sendMessage", { chat_id: chatId, text });
     }
   }
 }

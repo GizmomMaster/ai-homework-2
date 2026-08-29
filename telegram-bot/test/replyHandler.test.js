@@ -5,11 +5,20 @@ import { createFakeTelegramClient, muteConsole } from "./helpers.js";
 
 const basePayload = { jobId: "j_1", adapter: "telegram", externalId: "8123" };
 
+/** Заглушка progressTracker: только копит вызовы finish(). */
+function createFakeProgressTracker() {
+  const finished = [];
+  return { finished, async finish(jobId) { finished.push(jobId); } };
+}
+
 function deliver(payload, options) {
   const telegramClient = createFakeTelegramClient(options);
+  const progressTracker = createFakeProgressTracker();
   return {
     telegramClient,
-    run: () => handleReply({ payload: { ...basePayload, ...payload }, telegramClient }),
+    progressTracker,
+    run: () =>
+      handleReply({ payload: { ...basePayload, ...payload }, telegramClient, progressTracker }),
   };
 }
 
@@ -181,6 +190,35 @@ describe("handleReply", () => {
       await ctx.run();
 
       assert.match(ctx.telegramClient.lastText(), /ошибк/i);
+    });
+  });
+
+  describe("статусное сообщение прогресса", () => {
+    it("убирается перед отправкой окончательного ответа", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "completed", reply: { text: "ответ" } });
+
+      await ctx.run();
+
+      assert.deepEqual(ctx.progressTracker.finished, ["j_1"]);
+    });
+
+    it("убирается и при отказе/ошибке — не только при успехе", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "failed", reason: "llm_timeout" });
+
+      await ctx.run();
+
+      assert.deepEqual(ctx.progressTracker.finished, ["j_1"]);
+    });
+
+    it("работает без progressTracker (например, старый вызов без него)", async (t) => {
+      muteConsole(t);
+      const telegramClient = createFakeTelegramClient();
+
+      await assert.doesNotReject(() =>
+        handleReply({ payload: { ...basePayload, status: "completed", reply: { text: "ответ" } }, telegramClient }),
+      );
     });
   });
 

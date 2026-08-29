@@ -11,6 +11,7 @@ import { SummaryAgent } from "./agents/SummaryAgent.js";
 import { BinanceClient } from "./tools/BinanceClient.js";
 import { createTools } from "./tools/index.js";
 import { CallbackDelivery } from "./jobs/CallbackDelivery.js";
+import { ProgressNotifier } from "./jobs/ProgressNotifier.js";
 import { JobRunner } from "./jobs/JobRunner.js";
 import { createHandlers } from "./http/handlers.js";
 import { createRoutes } from "./http/routes.js";
@@ -31,6 +32,7 @@ import { createServer } from "./http/server.js";
  *   summaryAgent?: import("./agents/SummaryAgent.js").SummaryAgent,
  *   tools?: ReturnType<typeof import("./tools/index.js").createTools>,
  *   fetchImpl?: typeof fetch,
+ *   progressNotifier?: import("./jobs/ProgressNotifier.js").ProgressNotifier,
  * }} params
  */
 export function createApp({
@@ -43,6 +45,7 @@ export function createApp({
   summaryAgent,
   tools,
   fetchImpl,
+  progressNotifier,
 }) {
   const db = createDatabase(config.sqlitePath);
   const chatRepository = new ChatRepository(db);
@@ -84,6 +87,9 @@ export function createApp({
     jobRepository,
     dialogService,
     callbackDelivery,
+    progressNotifier:
+      progressNotifier ??
+      new ProgressNotifier({ callbackUrls: config.callbackUrls, authToken: config.authToken }),
     pollIntervalMs: config.jobs.pollIntervalMs,
     deliveryMaxAttempts: config.jobs.deliveryMaxAttempts,
     deliveryBackoffMs: config.jobs.deliveryBackoffMs,
