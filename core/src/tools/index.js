@@ -295,8 +295,13 @@ export function createTools({ binance, coingecko, cache = new TtlCache() }) {
           name: "limit",
         });
 
+        // Два срока жизни на один вызов, и это не путаница. Внешний короткий
+        // держит обзор целиком: половина его — текущие цены, они устаревают
+        // за минуту. Внутренний, суточный, живёт в самом buildMarketOverview
+        // и держит итоги прошедших суток: те закрыты и до полуночи не
+        // изменятся, так что перезапрашивать их вместе с ценами незачем.
         return cache.through(`ovw:${limit}`, TTL.overview, () =>
-          buildMarketOverview({ coingecko, binance, limit }),
+          buildMarketOverview({ coingecko, binance, cache, limit }),
         );
       },
     };

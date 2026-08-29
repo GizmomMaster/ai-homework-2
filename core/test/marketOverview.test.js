@@ -4,6 +4,7 @@ import { createFakeOverviewAgent, muteConsole, startCoreApp } from "./helpers.js
 import { TOOL_ERROR, ToolError } from "../src/tools/errors.js";
 import { BinanceClient } from "../src/tools/BinanceClient.js";
 import { CoinGeckoClient } from "../src/tools/CoinGeckoClient.js";
+import { TtlCache } from "../src/tools/cache.js";
 import {
   MAX_OVERVIEW_COINS,
   buildMarketOverview,
@@ -252,6 +253,119 @@ describe("обзор рынка", () => {
       assert.equal(overview.coins.length, 2);
       assert.equal(overview.coins[1].source, null);
       assert.equal(overview.coins[1].changePercent, null);
+    });
+  });
+
+  describe("обращение к источникам", () => {
+    it("к бирже ходит разом, к CoinGecko — по одному", async (t) => {
+      muteConsole(t);
+      let concurrentGecko = 0;
+      let peakGecko = 0;
+
+      const ranking = ["AAA", "BBB", "CCC"].map((s, i) => coin(s, { rank: i + 1 }));
+      const { binance } = clients({ ranking });
+      // Ни одной пары на бирже — значит все три уйдут в откат.
+      const coingecko = new CoinGeckoClient({
+        baseUrl: "http://coingecko.test",
+        fetchImpl: async (url) => {
+          const parsed = new URL(url);
+          if (parsed.pathname === "/api/v3/coins/markets") {
+            return { ok: true, status: 200, json: async () => ranking };
+          }
+          concurrentGecko += 1;
+          peakGecko = Math.max(peakGecko, concurrentGecko);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          concurrentGecko -= 1;
+          return { ok: false, status: 404, json: async () => ({}) };
+        },
+      });
+
+      await buildMarketOverview({ binance, coingecko, limit: 3, now: NOW });
+
+      // Пачка одновременных запросов упирается в лимит бесплатного тарифа:
+      // в лучшем случае 429, в худшем — оборванные соединения.
+      assert.equal(peakGecko, 1, "откаты к CoinGecko должны идти по одному");
+    });
+
+    it("отказ одного источника не мешает остальным монетам", async (t) => {
+      muteConsole(t);
+      const { binance, coingecko } = clients({
+        ranking: [coin("BTC"), coin("HYPE", { id: "hyperliquid", rank: 2 })],
+        candles: { BTCUSDT: [candle(DAY_START, { open: "80000", close: "77600" })] },
+        // hyperliquid не отвечает — откат для него провалится
+      });
+
+      const overview = await buildMarketOverview({ binance, coingecko, limit: 2, now: NOW });
+
+      assert.equal(overview.coins[0].source, "binance");
+      assert.equal(overview.coins[1].source, null, "строка осталась, но без цифр");
+      assert.equal(overview.coins.length, 2);
+    });
+  });
+
+  describe("кеш итогов суток", () => {
+    it("не перезапрашивает закрытую свечу", async () => {
+      const cache = new TtlCache();
+      const ranking = [coin("BTC")];
+      const candles = { BTCUSDT: [candle(DAY_START)] };
+
+      const first = clients({ ranking, candles });
+      await buildMarketOverview({ ...first, cache, limit: 1, now: NOW });
+      const second = clients({ ranking, candles });
+      await buildMarketOverview({ ...second, cache, limit: 1, now: NOW });
+
+      // Рейтинг спрашиваем заново — цены живут минуту. А вот сутки закрыты
+      // и до полуночи не изменятся.
+      assert.equal(second.calls.binance.length, 0, "свеча взята из кеша");
+      assert.deepEqual(second.calls.coingecko, ["/api/v3/coins/markets"]);
+    });
+
+    it("в новые сутки берёт свежую свечу", async () => {
+      const cache = new TtlCache();
+      const ranking = [coin("BTC")];
+
+      const first = clients({ ranking, candles: { BTCUSDT: [candle(DAY_START)] } });
+      await buildMarketOverview({ ...first, cache, limit: 1, now: NOW });
+
+      const second = clients({ ranking, candles: { BTCUSDT: [candle(DAY_START + DAY_MS)] } });
+      await buildMarketOverview({ ...second, cache, limit: 1, now: NOW + DAY_MS });
+
+      assert.deepEqual(second.calls.binance, ["BTCUSDT"], "дата в ключе сменилась вместе с сутками");
+    });
+
+    it("не запоминает неудачу: оборванная сеть не закрепляет н/д на сутки", async (t) => {
+      muteConsole(t);
+      const cache = new TtlCache();
+      const ranking = [coin("HYPE", { id: "hyperliquid" })];
+      const chart = {
+        hyperliquid: {
+          prices: [[DAY_START, 84.67], [DAY_START + DAY_MS, 80.91]],
+          total_volumes: [[DAY_START + DAY_MS, 1e9]],
+        },
+      };
+
+      // Первый заход: CoinGecko не отвечает по истории.
+      const failed = clients({ ranking });
+      const first = await buildMarketOverview({ ...failed, cache, limit: 1, now: NOW });
+      assert.equal(first.coins[0].source, null);
+
+      // Второй: источник ожил — пробел должен затянуться, а не остаться.
+      const ok = clients({ ranking, charts: chart });
+      const second = await buildMarketOverview({ ...ok, cache, limit: 1, now: NOW });
+
+      assert.equal(second.coins[0].source, "coingecko");
+      assert.equal(second.coins[0].open, 84.67);
+    });
+
+    it("без кеша работает как прежде", async () => {
+      const ranking = [coin("BTC")];
+      const candles = { BTCUSDT: [candle(DAY_START)] };
+
+      const c = clients({ ranking, candles });
+      await buildMarketOverview({ ...c, limit: 1, now: NOW });
+      await buildMarketOverview({ ...c, limit: 1, now: NOW });
+
+      assert.equal(c.calls.binance.length, 2);
     });
   });
 

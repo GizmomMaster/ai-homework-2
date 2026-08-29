@@ -75,11 +75,20 @@ export function yesterdayStartMs(now = Date.now()) {
  * @param {{
  *   coingecko: import("./CoinGeckoClient.js").CoinGeckoClient,
  *   binance: import("./BinanceClient.js").BinanceClient,
+ *   cache?: import("./cache.js").TtlCache,
  *   limit?: number,
  *   now?: number,
  * }} deps
+ *   `cache` необязателен: без него итоги суток берутся заново каждый раз —
+ *   так удобнее в тестах, где важно посчитать обращения к источнику.
  */
-export async function buildMarketOverview({ coingecko, binance, limit = 10, now = Date.now() }) {
+export async function buildMarketOverview({
+  coingecko,
+  binance,
+  cache,
+  limit = 10,
+  now = Date.now(),
+}) {
   const ranked = await coingecko.get("/api/v3/coins/markets", {
     vs_currency: "usd",
     order: "market_cap_desc",
@@ -122,9 +131,7 @@ export async function buildMarketOverview({ coingecko, binance, limit = 10, now 
   }
 
   const dayStart = yesterdayStartMs(now);
-  const history = await Promise.all(
-    selected.map((coin) => yesterday({ coin, binance, coingecko, dayStart })),
-  );
+  const history = await collectHistory({ selected, binance, coingecko, cache, dayStart });
 
   return {
     dayStartMs: dayStart,
@@ -134,18 +141,74 @@ export async function buildMarketOverview({ coingecko, binance, limit = 10, now 
 }
 
 /**
- * Итоги вчерашних суток по одной монете. Не бросает: отказ по одной строке —
+ * Пары нет на бирже. Отдельно от `null`, потому что судьба у них в кеше
+ * разная: это устойчивый факт, а `null` — «в этот раз не получилось».
+ */
+const NOT_LISTED = Object.freeze({ notListed: true });
+
+/** Пусто: монета остаётся в сводке, но со `н/д` вместо цифр. */
+const NO_HISTORY = { open: null, close: null, changePercent: null, dayVolume: null, source: null };
+
+/**
+ * Сколько держать итоги прошедших суток.
+ *
+ * Сутки закрыты, и их свеча больше не изменится — до самой полуночи, когда
+ * ключ кеша сменится вместе с датой. Сутки с запасом и держим: перезапрашивать
+ * неизменное каждую минуту вместе с текущими ценами незачем, а именно это и
+ * происходило, пока весь обзор жил под одним коротким сроком.
+ */
+const DAY_HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Кеширует итоги суток по одной монете.
+ *
+ * Неудача (`null` от источника) наружу уходит как `undefined` — такое
+ * {@link TtlCache} не запоминает. Разница существенная: оборванное соединение
+ * к CoinGecko иначе закрепило бы `н/д` для монеты на сутки вперёд, хотя
+ * следующий запрос прошёл бы без единой заминки.
+ */
+function cachedDay(cache, key, produce) {
+  if (!cache) return produce();
+  return cache.through(key, DAY_HISTORY_TTL_MS, async () => (await produce()) ?? undefined);
+}
+
+/**
+ * Итоги вчерашних суток по всем монетам. Не бросает: отказ по одной строке —
  * это `н/д` в таблице, а не потеря всего отчёта (то же решение, что и у
  * `executeTool` для шагов плана).
+ *
+ * Два источника опрашиваются **по-разному, и это не случайность**. У Binance
+ * лимит считается весом запросов и щедр — десяток свечей можно взять разом.
+ * У CoinGecko на бесплатном тарифе лимит низкий, и пачка одновременных
+ * запросов упирается в него: в лучшем случае приходит 429, в худшем соединения
+ * просто рвутся. Поэтому откат идёт по одной монете за раз — он всё равно
+ * нужен единицам из десятки, так что на общем времени это почти не сказывается.
  */
-async function yesterday({ coin, binance, coingecko, dayStart }) {
-  const fromBinance = await binanceDay({ symbol: coin.symbol, binance, dayStart });
-  if (fromBinance) return fromBinance;
+async function collectHistory({ selected, binance, coingecko, cache, dayStart }) {
+  const fromBinance = await Promise.all(
+    selected.map((coin) =>
+      // Дата в ключе — не для уникальности, а вместо инвалидации: в полночь
+      // ключ сменится сам, и вчерашняя запись перестанет находиться.
+      cachedDay(cache, `day:b:${coin.symbol}:${dayStart}`, () =>
+        binanceDay({ symbol: coin.symbol, binance, dayStart }),
+      ),
+    ),
+  );
 
-  const fromCoingecko = await coingeckoDay({ id: coin.id, coingecko, dayStart });
-  if (fromCoingecko) return fromCoingecko;
+  const history = [];
+  for (const [index, coin] of selected.entries()) {
+    const candle = fromBinance[index];
+    if (candle && candle !== NOT_LISTED) {
+      history[index] = candle;
+      continue;
+    }
+    history[index] =
+      (await cachedDay(cache, `day:g:${coin.id}:${dayStart}`, () =>
+        coingeckoDay({ id: coin.id, coingecko, dayStart }),
+      )) ?? NO_HISTORY;
+  }
 
-  return { open: null, close: null, changePercent: null, dayVolume: null, source: null };
+  return history;
 }
 
 /**
@@ -154,8 +217,12 @@ async function yesterday({ coin, binance, coingecko, dayStart }) {
  * `limit=2`, берётся элемент `[0]` — вчерашняя **завершённая** свеча; `[1]` —
  * сегодняшняя, ещё не закрытая, ей в сводке за прошедшие сутки не место.
  *
- * Возвращает `null`, если пары нет в листинге (Binance отвечает на такое
- * ошибкой `unknown_symbol`) или если свеча пришла не за те сутки.
+ * Три разных исхода, и различать их важно из-за кеша:
+ *   - свеча — успех;
+ *   - {@link NOT_LISTED} — пары нет в листинге. Факт устойчивый: до полуночи
+ *     пара не появится, и запоминать его можно наравне с самой свечой;
+ *   - `null` — не сложилось: сеть, лимит, свеча не за те сутки. Такое
+ *     запоминать нельзя, иначе одна заминка закрепит пробел до конца дня.
  */
 async function binanceDay({ symbol, binance, dayStart }) {
   let rows;
@@ -167,7 +234,7 @@ async function binanceDay({ symbol, binance, dayStart }) {
     });
   } catch (error) {
     // Отсутствие пары — ожидаемый исход, а не сбой: молча уходим на откат.
-    if (error instanceof ToolError && error.code === TOOL_ERROR.unknownSymbol) return null;
+    if (error instanceof ToolError && error.code === TOOL_ERROR.unknownSymbol) return NOT_LISTED;
     logError(`Не удалось получить дневную свечу ${symbol}USDT:`, error);
     return null;
   }
