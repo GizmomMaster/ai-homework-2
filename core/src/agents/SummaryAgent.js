@@ -47,7 +47,7 @@ export class SummaryAgent extends TextAgent {
    * @param {{
    *   question: string,
    *   taskSummary: string,
-   *   steps: Array<{ action: string, ok: boolean, value?: object, error?: { code: string } }>,
+   *   steps: Array<{ action: string, ok: boolean, value?: object, error?: { code: string, message?: string } }>,
    * }} input
    * @returns {Promise<import("../llm/LlmRunner.js").ChatResult>}
    */
@@ -67,9 +67,13 @@ export function buildBrief({ question, taskSummary, steps }) {
     .map((step) => `${step.action}:\n${JSON.stringify(compactForPrompt(step.value), null, 1)}`)
     .join("\n\n");
 
+  // Вместе с причиной: отказ инструмента бывает содержательным ответом, а не
+  // просто неудачей. «RSI считается только для BTC и ETH» — это то, что
+  // пользователь и должен прочитать; без причины модель напишет размытое «не
+  // удалось получить данные» и подменит ответ отговоркой.
   const missing = steps
     .filter((step) => !step.ok)
-    .map((step) => `- ${step.action}`)
+    .map((step) => (step.error?.message ? `- ${step.action}: ${step.error.message}` : `- ${step.action}`))
     .join("\n");
 
   const parts = [

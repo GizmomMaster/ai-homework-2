@@ -66,9 +66,17 @@ export function buildPlanSchema(tools) {
  * Системный промпт планировщика. Список инструментов не переписан вручную,
  * а собран из реестра: разойтись с настоящим набором он не может.
  *
+ * Навыки (файлы SKILL.md в `core/skills`) дописываются разделом в конце.
+ * Отдельным — потому что каталог инструментов отвечает на вопрос «что есть»,
+ * а навык на вопрос «как этим пользоваться и что делать, когда нельзя»;
+ * смешать их значило бы прятать правила в описании параметра. Раздела нет
+ * вовсе, если навыков нет: пустой заголовок в промпте — это шум, на который
+ * небольшая модель отвлекается.
+ *
  * @param {ReturnType<typeof import("../tools/index.js").createTools>} tools
+ * @param {Array<{ name: string, description: string, body: string }>} [skills]
  */
-export function buildPlannerPrompt(tools) {
+export function buildPlannerPrompt(tools, skills = []) {
   const catalogue = Object.entries(tools)
     .map(([name, tool], index) => {
       const params = Object.entries(tool.parameters)
@@ -81,6 +89,13 @@ export function buildPlannerPrompt(tools) {
     })
     .join("\n");
 
+  // Правила навыка идут последними и потому имеют вес: у инструкций в конце
+  // промпта у небольших моделей больше шансов быть применёнными, чем у тех,
+  // что утонули в середине перечня.
+  const skillRules = skills
+    .map((skill) => `### ${skill.name}\n${skill.description}\n\n${skill.body}`)
+    .join("\n\n");
+
   return `Ты — Агент-Планировщик в мультиагентной системе для криптотрейдеров. Тебе достаётся задача пользователя по анализу или сбору данных о криптовалютах. Твоя цель: оценить, выполнима ли она имеющимися инструментами, и построить пошаговый план.
 
 ДОСТУПНЫЕ ИНСТРУМЕНТЫ (других в системе НЕТ):
@@ -92,7 +107,9 @@ ${catalogue}
 * Если задача выполнима — canExecute=true и план из шагов. Шаги независимы и выполняются одновременно, поэтому шаг не может опираться на результат другого.
 * Шагов должно быть ровно столько, сколько нужно. Спросили про три монеты — три шага. Не добавляй шаги «на всякий случай»: каждый из них стоит запроса к бирже.
 * Торговые пары указывай в виде символов Binance: BTCUSDT, ETHUSDT, SOLUSDT. Если пользователь назвал монету без пары, бери пару к USDT.
-* В action пиши, что делает шаг, — коротко, по-русски, одной строкой.`;
+* В action пиши, что делает шаг, — коротко, по-русски, одной строкой.${
+    skillRules ? `\n\nНАВЫКИ (правила по отдельным инструментам, имеют приоритет над общими правилами выше):\n\n${skillRules}` : ""
+  }`;
 }
 
 /** Проверка обязательных полей — на случай раннера без поддержки схемы. */
@@ -113,12 +130,13 @@ export class PlannerAgent {
    * @param {{
    *   llmRunner: import("../llm/LlmRunner.js").LlmRunner,
    *   tools: ReturnType<typeof import("../tools/index.js").createTools>,
+   *   skills?: Array<{ name: string, description: string, body: string }>,
    * }} deps
    */
-  constructor({ llmRunner, tools }) {
+  constructor({ llmRunner, tools, skills = [] }) {
     this.agent = new JsonAgent({
       llmRunner,
-      systemPrompt: buildPlannerPrompt(tools),
+      systemPrompt: buildPlannerPrompt(tools, skills),
       schema: buildPlanSchema(tools),
       validate: isPlan,
     });

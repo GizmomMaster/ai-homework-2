@@ -3,6 +3,7 @@ import { LLM_ERROR } from "../llm/LlmRunner.js";
 import { ROUTER_INTENT } from "../agents/RouterAgent.js";
 import { logError, log } from "../logger.js";
 import { renderReport } from "./renderReport.js";
+import { estimateExchangeTokens } from "./estimateTokens.js";
 
 /**
  * Причины отказа, не являющиеся ошибкой. Наружу уходит только код: как это
@@ -127,6 +128,10 @@ export class DialogService {
      * прибавка. Служебные обращения (маршрутизатор) в неё не входят и входить
      * не должны: их промпт живёт один вызов и к контекстному окну диалога
      * отношения не имеет.
+     *
+     * Там, где отвечающего вызова не было — отчёт по задаче, уточняющий
+     * вопрос, — измерять нечего, и размер растёт на оценку обмена
+     * (`estimateExchangeTokens`) до ближайшего измерения.
      */
     const spent = { promptTokens: 0, completionTokens: 0 };
 
@@ -212,19 +217,13 @@ export class DialogService {
    */
   #clarification({ session, text, verdict, spent }) {
     const question = verdict.clarificationQuestion?.trim();
-    // Диалог вырастет на вопрос и ответ, но модель его не измеряла: размер
-    // остаётся прежним до следующего обращения к ней, которое посчитает всё
-    // разом. Ошибка в меньшую сторону безопасна — она может только отложить
-    // отказ по переполнению, но не вызвать его раньше времени.
-    const totalTokens = session.totalTokens;
-    const usage = this.#usage(totalTokens, spent);
-
     if (!question) {
+      // Отказ в историю не идёт, значит и размер диалога не меняется.
       return {
         status: JOB_STATUS.rejected,
         reason: REJECT_REASON.clarificationNeeded,
         intent: verdict.intent,
-        usage,
+        usage: this.#usage(session.totalTokens, spent),
       };
     }
 
@@ -328,12 +327,15 @@ export class DialogService {
   }
 
   /**
-   * Ответ, который не измерялся моделью: отчёт и объяснение планировщика
-   * собираются у нас, поэтому размер диалога остаётся прежним до следующего
-   * обращения к модели за текстом — оно посчитает всё разом.
+   * Ответ, который не измерялся моделью: отчёт, уточняющий вопрос и объяснение
+   * планировщика собираются у нас, а сводящий агент считает свой промпт —
+   * данные шагов, а не историю диалога. Точного числа взять негде, поэтому
+   * размер диалога растёт на оценку обмена: обмен уходит в историю и в
+   * следующем промпте место займёт настоящее. Следующее обращение к
+   * отвечающему агенту посчитает всё разом и заменит оценку измерением.
    */
   #reply({ session, text, replyText, spent, intent }) {
-    const totalTokens = session.totalTokens;
+    const totalTokens = session.totalTokens + estimateExchangeTokens(text, replyText);
     return {
       status: JOB_STATUS.completed,
       replyText,

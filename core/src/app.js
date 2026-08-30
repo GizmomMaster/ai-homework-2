@@ -13,6 +13,7 @@ import { MarketOverviewService } from "./domain/MarketOverviewService.js";
 import { BinanceClient } from "./tools/BinanceClient.js";
 import { CoinGeckoClient } from "./tools/CoinGeckoClient.js";
 import { createTools } from "./tools/index.js";
+import { loadSkills } from "./skills/index.js";
 import { CallbackDelivery } from "./jobs/CallbackDelivery.js";
 import { ProgressNotifier } from "./jobs/ProgressNotifier.js";
 import { JobRunner } from "./jobs/JobRunner.js";
@@ -71,13 +72,16 @@ export function createApp({
         baseUrl: config.tools.coingeckoBaseUrl,
         timeoutMs: config.tools.timeoutMs,
       }),
+      // Пустой pythonBin отключает инструмент RSI: см. config.js.
+      rsi: config.tools.rsi?.pythonBin ? config.tools.rsi : undefined,
     });
 
   const dialogService = new DialogService({
     chatRepository,
     routerAgent: routerAgent ?? new RouterAgent({ llmRunner: runner }),
     theoryAgent: theoryAgent ?? new TheoryAgent({ llmRunner: runner }),
-    plannerAgent: plannerAgent ?? new PlannerAgent({ llmRunner: runner, tools: marketTools }),
+    plannerAgent:
+      plannerAgent ?? new PlannerAgent({ llmRunner: runner, tools: marketTools, skills: loadSkills(config.skillsDir) }),
     planExecutor: planExecutor ?? new PlanExecutor({ tools: marketTools }),
     summaryAgent: summaryAgent ?? new SummaryAgent({ llmRunner: runner }),
     contextWindowTokens: config.contextWindowTokens,

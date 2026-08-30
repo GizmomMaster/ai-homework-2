@@ -2,6 +2,7 @@ import { BinanceClient } from "./BinanceClient.js";
 import { TtlCache } from "./cache.js";
 import { TOOL_ERROR, ToolError } from "./errors.js";
 import { MAX_OVERVIEW_COINS, buildMarketOverview } from "./marketOverview.js";
+import { createRsiTool } from "./rsi.js";
 import {
   KLINE_INTERVALS,
   optionalAmount,
@@ -16,6 +17,9 @@ export { TOOL_ERROR, ToolError } from "./errors.js";
 
 /** Имя инструмента обзора рынка — на него опирается команда /start. */
 export const MARKET_OVERVIEW_TOOL = "get_crypto_market_overview";
+
+/** Имя инструмента RSI — на него ссылается навык `skills/crypto-rsi`. */
+export const RSI_TOOL = "get_crypto_rsi";
 
 /**
  * Время жизни кеша по инструментам. Разное не для красоты: срез стакана
@@ -53,14 +57,19 @@ const MAX_KLINES = 500;
  * @param {{
  *   binance: BinanceClient,
  *   coingecko?: import("./CoinGeckoClient.js").CoinGeckoClient,
+ *   rsi?: { pythonBin: string, scriptPath: string, timeoutMs?: number },
  *   cache?: TtlCache,
  * }} deps
  *   `coingecko` необязателен: без него доступны только инструменты поверх
  *   биржи, а обзор рынка в реестр не попадает — рейтинга по капитализации
  *   взять неоткуда, и лучше не иметь инструмента вовсе, чем иметь такой,
  *   который всегда отказывает.
+ *
+ *   `rsi` необязателен по той же причине: расчёт живёт в Python-скрипте, и
+ *   без интерпретатора с TA-Lib инструмент отказывал бы на каждом вызове —
+ *   уже после того, как планировщик потратил на него шаг.
  */
-export function createTools({ binance, coingecko, cache = new TtlCache() }) {
+export function createTools({ binance, coingecko, rsi, cache = new TtlCache() }) {
   /** Суточная сводка по паре. Общая для двух инструментов — и кеш общий. */
   const ticker24h = (symbol) =>
     cache.through(`t24:${symbol}`, TTL.ticker, () =>
@@ -273,6 +282,10 @@ export function createTools({ binance, coingecko, cache = new TtlCache() }) {
       },
     },
   };
+
+  if (rsi) {
+    tools[RSI_TOOL] = createRsiTool({ binance, cache, ...rsi });
+  }
 
   if (coingecko) {
     tools[MARKET_OVERVIEW_TOOL] = {

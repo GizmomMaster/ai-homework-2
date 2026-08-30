@@ -21,6 +21,10 @@ export function testConfig(overrides = {}) {
       binanceBaseUrl: "http://binance.test",
       coingeckoBaseUrl: "http://coingecko.test",
       timeoutMs: 500,
+      // Инструмент RSI выключен (пустой pythonBin): тесты приложения проверяют
+      // очередь и доставку, и запускать в них подпроцессы незачем. Сам
+      // инструмент проверяется в rsi.test.js.
+      rsi: { pythonBin: "", scriptPath: "rsi.py", timeoutMs: 1000 },
     },
     jobs: {
       pollIntervalMs: 10,
