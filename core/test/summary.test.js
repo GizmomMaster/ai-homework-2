@@ -119,6 +119,25 @@ describe("задание для сводящего агента", () => {
     assert.match(brief, /СОБРАТЬ НЕ УДАЛОСЬ:\n- Объём NOSUCH/);
   });
 
+  it("передаёт причину отказа: она бывает содержательным ответом", () => {
+    // «RSI считается только для BTC и ETH» — это то, что пользователь должен
+    // прочитать. Без причины модель напишет размытое «данные получить не
+    // удалось» и подменит ответ отговоркой.
+    const brief = buildBrief({
+      question: "RSI по SOL?",
+      taskSummary: "RSI",
+      steps: [
+        {
+          action: "RSI по SOL",
+          ok: false,
+          error: { code: "unsupported_asset", message: "Пока показатель RSI считается только для BTC и ETH." },
+        },
+      ],
+    });
+
+    assert.match(brief, /- RSI по SOL: Пока показатель RSI считается только для BTC и ETH\./);
+  });
+
   it("не упоминает раздел о пробелах, когда всё удалось", () => {
     const brief = buildBrief({ question: "?", taskSummary: "t", steps: [steps[0]] });
 

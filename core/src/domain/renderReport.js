@@ -37,6 +37,14 @@ const LABELS = {
   levelsScanned: "уровней просмотрено",
   interval: "интервал",
   candles: "свечи",
+  rsi: "RSI",
+  zone: "зона",
+  recent: "предыдущие значения",
+  overbought: "порог перекупленности",
+  oversold: "порог перепроданности",
+  samples: "свечей в расчёте",
+  length: "период",
+  asOf: "на момент",
   pairs: "пары",
   minVolumeUsd: "порог объёма, USDT",
   quoteAsset: "котируемый актив",
@@ -57,6 +65,8 @@ const ERRORS = {
   upstream_error: "биржа ответила ошибкой",
   timeout: "биржа не ответила вовремя",
   unavailable: "не удалось связаться с биржей",
+  unsupported_asset: "этот актив инструментом не поддерживается",
+  computation_failed: "не удалось выполнить расчёт",
 };
 
 /**

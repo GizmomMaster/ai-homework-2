@@ -35,6 +35,10 @@ Telegram ──► telegram-bot ──POST /v1/.../messages──► Core ──
   голом процессоре она поедет, но каждый ответ займёт минуты — тогда берите
   `qwen3:4b` или `qwen3:1.7b` и не забудьте уменьшить `CONTEXT_WINDOW_TOKENS`.
 - Токен бота от [@BotFather](https://t.me/BotFather).
+- Только для запуска без Docker: **Python 3.9+ с библиотекой TA-Lib** — ею
+  считается RSI (см. [«Расчёт RSI»](#расчёт-rsi)). В образ Core она входит, а
+  без Python инструмент RSI можно просто отключить, поставив в `core/.env`
+  пустое `RSI_PYTHON_BIN=`; всё остальное работает как прежде.
 
 ### Установка на Windows
 
@@ -196,6 +200,38 @@ Ollama по HTTP.
 - **Ollama остаётся на хосте, а не в WSL** — см. «Видеокарта AMD» выше.
   Сервисы в контейнерах ходят к ней по `host.docker.internal`.
 
+## Расчёт RSI
+
+RSI (индекс относительной силы) считает не Node, а Python-скрипт
+[`core/scripts/rsi/rsi.py`](./core/scripts/rsi/rsi.py) поверх библиотеки
+TA-Lib: у показателя Уайлдера рекурсивное сглаживание, и своя реализация
+расходилась бы с терминалом пользователя на мелочах вроде затравки первого
+среднего.
+
+Core запускает скрипт подпроцессом и передаёт ему свечи через stdin — в сеть
+подпроцесс не ходит (`--no-fetch`), потому что HTTP-клиент биржи с кешем и
+таймаутами у Core уже есть. Запустить скрипт можно и руками, тогда он сходит
+за свечами сам:
+
+```bash
+python3 core/scripts/rsi/rsi.py --symbol BTC --interval 1h
+```
+
+**Поддерживаются только BTC и ETH.** Для остальных монет система отвечает, что
+расчёт пока доступен только для них, и предлагает то, что умеет: цену, объёмы,
+свечи, стакан. Правила, по которым планировщик это решает, лежат не в коде, а
+в навыке [`core/skills/crypto-rsi/SKILL.md`](./core/skills/crypto-rsi/SKILL.md):
+его текст дописывается в промпт планировщика при старте, и менять правила
+можно, не трогая JavaScript.
+
+Зависимости ставятся одной командой; venv, если он используется, должен быть
+активирован до запуска Core, либо путь к интерпретатору указывают в
+`RSI_PYTHON_BIN`:
+
+```bash
+pip install -r core/scripts/rsi/requirements.txt
+```
+
 ## Запуск без Docker
 
 Нужны два терминала — по одному на сервис.
@@ -205,6 +241,7 @@ Ollama по HTTP.
 cd core
 cp .env.example .env
 npm install    # соберёт better-sqlite3, это займёт пару минут
+pip install -r scripts/rsi/requirements.txt   # TA-Lib для расчёта RSI
 npm start
 
 # Терминал 2
@@ -218,6 +255,7 @@ npm start              # зависимостей нет, install не нуже�
 cd core
 Copy-Item .env.example .env
 npm install    # соберёт better-sqlite3, это займёт пару минут
+pip install -r scripts/rsi/requirements.txt   # TA-Lib для расчёта RSI
 npm start
 
 # Терминал 2
