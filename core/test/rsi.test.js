@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,23 +8,20 @@ import { BinanceClient } from "../src/tools/BinanceClient.js";
 import { TtlCache } from "../src/tools/cache.js";
 import { TOOL_ERROR, RSI_TOOL, createTools, executeTool, toolNames } from "../src/tools/index.js";
 import { RSI_ONLY_BTC_ETH } from "../src/tools/rsi.js";
+import { findRsiPython, pythonCandidates } from "../src/tools/pythonBin.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(here, "fixtures", "fake-rsi.mjs");
 const REAL_SCRIPT = join(here, "..", "scripts", "rsi", "rsi.py");
 
 /**
- * Интерпретатор с установленной TA-Lib, если такой есть. Проверяем импортом,
- * а не наличием файла: python3 в PATH обычно есть, а библиотеки в нём обычно
- * нет, и тест на настоящем скрипте должен различать эти случаи.
+ * Интерпретатор с установленной TA-Lib, если такой есть. Ищем тем же кодом,
+ * что и сервис при старте: проверка идёт импортом библиотеки, а не наличием
+ * файла — python3 в PATH обычно есть, а библиотеки в нём обычно нет, и тест
+ * на настоящем скрипте должен различать эти случаи.
  */
 function pythonWithTalib() {
-  for (const bin of [process.env.RSI_PYTHON_BIN, "python3"]) {
-    if (!bin) continue;
-    const probe = spawnSync(bin, ["-c", "import talib"], { stdio: "ignore" });
-    if (probe.status === 0) return bin;
-  }
-  return undefined;
+  return findRsiPython();
 }
 
 /** Одна свеча Binance: нам нужна только цена закрытия — четвёртая по счёту. */
@@ -259,6 +256,43 @@ describe("инструмент RSI", () => {
 
       assert.equal(outcome.error.code, TOOL_ERROR.computationFailed);
       assert.match(outcome.error.message, /цен закрытия/);
+    });
+  });
+  describe("подбор интерпретатора", () => {
+    /** Заглушка пробы: успешным считается только названный интерпретатор. */
+    const probe = (working) => (bin) => ({ status: bin === working ? 0 : 1 });
+
+    it("берёт первый интерпретатор, в котором импортируется TA-Lib", () => {
+      const candidates = pythonCandidates({ env: {}, platform: "linux" });
+      const last = candidates.at(-1);
+
+      assert.equal(findRsiPython({ env: {}, platform: "linux", spawnImpl: probe(last) }), last);
+    });
+
+    it("не возвращает интерпретатор без библиотеки", () => {
+      assert.equal(findRsiPython({ env: {}, platform: "linux", spawnImpl: probe("нет такого") }), undefined);
+    });
+
+    it("ищет venv рядом с сервисом и в домашнем каталоге", () => {
+      const candidates = pythonCandidates({ env: {}, platform: "linux" });
+
+      assert.equal(candidates[0], "python3");
+      assert.equal(candidates.filter((bin) => bin.includes(".venv")).length, 2);
+    });
+
+    it("заданный путь отменяет поиск: подставлять другой интерпретатор нельзя", () => {
+      const env = { RSI_PYTHON_BIN: "/opt/venv/bin/python" };
+
+      assert.deepEqual(pythonCandidates({ env, platform: "linux" }), ["/opt/venv/bin/python"]);
+      assert.equal(findRsiPython({ env, platform: "linux", spawnImpl: probe("python3") }), undefined);
+    });
+
+    it("на Windows ищет python.exe в Scripts", () => {
+      const candidates = pythonCandidates({ env: {}, platform: "win32" });
+
+      assert.equal(candidates[0], "python");
+      assert.ok(candidates.every((bin) => !bin.includes("/bin/")));
+      assert.ok(candidates.slice(1).every((bin) => bin.endsWith("python.exe")));
     });
   });
 });

@@ -36,9 +36,11 @@ WORKDIR /app
 RUN apk add --no-cache python3
 COPY --from=python /opt/venv /opt/venv
 
-# Путь задан явно, а не подбирается: в образе venv лежит вне каталога сервиса,
-# и автоподбор из config.js его бы не нашёл.
-ENV RSI_PYTHON_BIN=/opt/venv/bin/python
+# venv впереди PATH: python3 в образе — это интерпретатор с TA-Lib, и
+# отдельный путь в окружении не нужен (см. src/tools/pythonBin.js). Задать
+# его через ENV всё равно не вышло бы: compose пробрасывает core/.env через
+# env_file, а он перекрывает ENV образа.
+ENV PATH="/opt/venv/bin:$PATH"
 
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
