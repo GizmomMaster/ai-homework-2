@@ -37,20 +37,22 @@ function thinkMode(name, defaultValue) {
 }
 
 /**
- * Интерпретатор Python для расчёта индикаторов.
+ * Флаг вместо пути: считать RSI или нет.
  *
- * По умолчанию — `python3` из PATH. Этого достаточно и для venv: активированное
- * окружение подменяет `python3` своим, и отдельный путь нужен только там, где
- * Core запускают мимо активации, — например в контейнере, где путь прописан
- * в Dockerfile.
- *
- * Пустая строка отключает инструмент RSI целиком, и это рабочее состояние, а
- * не поломка: без интерпретатора с TA-Lib он отказывал бы на каждом вызове,
- * уже потратив шаг планировщика. Лучше не иметь его в реестре вовсе.
+ * Интерпретатор Core находит сам (см. tools/pythonBin.js) — путь к файлу
+ * неудобно писать, он разный на каждой машине, и один и тот же .env читают
+ * и хост, и контейнер. Выключать имеет смысл, когда инструмент не нужен:
+ * без Python с TA-Lib он и так не попадёт в реестр.
  */
-function pythonBin() {
-  const raw = process.env.RSI_PYTHON_BIN;
-  return raw === undefined ? "python3" : raw.trim();
+function boolFlag(name, defaultValue) {
+  const raw = process.env[name];
+  if (!raw) return defaultValue;
+
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new Error(
+    `Переменная окружения ${name} должна быть "true" или "false", получено: "${raw}".`,
+  );
 }
 
 /**
@@ -138,7 +140,7 @@ export const config = {
      * оставлять настраиваемым.
      */
     rsi: {
-      pythonBin: pythonBin(),
+      enabled: boolFlag("RSI_ENABLED", true),
       scriptPath: join(projectRoot, "scripts", "rsi", "rsi.py"),
       // Расчёт занимает доли секунды; предел нужен на случай, если
       // интерпретатор чего-то ждёт, а шаг плана — нет.

@@ -13,6 +13,7 @@ import { MarketOverviewService } from "./domain/MarketOverviewService.js";
 import { BinanceClient } from "./tools/BinanceClient.js";
 import { CoinGeckoClient } from "./tools/CoinGeckoClient.js";
 import { createTools } from "./tools/index.js";
+import { findRsiPython } from "./tools/pythonBin.js";
 import { loadSkills } from "./skills/index.js";
 import { CallbackDelivery } from "./jobs/CallbackDelivery.js";
 import { ProgressNotifier } from "./jobs/ProgressNotifier.js";
@@ -20,6 +21,32 @@ import { JobRunner } from "./jobs/JobRunner.js";
 import { createHandlers } from "./http/handlers.js";
 import { createRoutes } from "./http/routes.js";
 import { createServer } from "./http/server.js";
+import { log } from "./logger.js";
+
+/**
+ * Настройки инструмента RSI вместе с найденным интерпретатором — или
+ * `undefined`, если считать нечем.
+ *
+ * Инструмент, отсутствующий в реестре, лучше сломанного: планировщик строит
+ * план по реестру и на несуществующую возможность шаг не потратит. Поэтому
+ * ищем интерпретатор один раз здесь, при сборке приложения, а не при первом
+ * вызове — к тому моменту решение принимать поздно.
+ *
+ * @param {{ enabled: boolean, scriptPath: string, timeoutMs?: number }} settings
+ */
+function resolveRsi({ enabled, ...settings } = {}) {
+  if (!enabled) return undefined;
+
+  const pythonBin = findRsiPython();
+  if (!pythonBin) {
+    log(
+      "Инструмент RSI отключён: не найден Python с библиотекой TA-Lib. " +
+        "Поставить: pip install -r scripts/rsi/requirements.txt",
+    );
+    return undefined;
+  }
+  return { ...settings, pythonBin };
+}
 
 /**
  * Сборка приложения из частей. Вынесена из точки входа, чтобы тесты могли
@@ -72,8 +99,7 @@ export function createApp({
         baseUrl: config.tools.coingeckoBaseUrl,
         timeoutMs: config.tools.timeoutMs,
       }),
-      // Пустой pythonBin отключает инструмент RSI: см. config.js.
-      rsi: config.tools.rsi?.pythonBin ? config.tools.rsi : undefined,
+      rsi: resolveRsi(config.tools.rsi),
     });
 
   const dialogService = new DialogService({
