@@ -5,19 +5,19 @@ import { logError, log } from "../logger.js";
 /**
  * Сводка по рынку для приветственного экрана адаптера.
  *
- * Собирает её модель — она видит цифры целиком и может сказать про них
- * что-то осмысленное, чего шаблон не скажет никогда. Но отрисовка кодом
- * никуда не делась: она осталась **откатом**, как `renderReport` при
- * `SummaryAgent`. Причина та же, что и в конвейере задач: данные к этому
- * моменту уже получены и оплачены запросами к двум внешним API, и потерять
- * их из-за сбоя на последнем шаге — худший из возможных исходов.
+ * Работа поделена по способностям: **таблицы собирает код, текст пишет
+ * модель**. Деление далось опытом, а не вкусом. Сначала всю сводку писала
+ * модель — и раз за разом промахивалась мимо формата: то ставила
+ * markdown-таблицу, которую Telegram не рисует вовсе, то клала в блок кода
+ * заголовок и фразу вместо таблицы. Каждый промах стоил всей сводки: показать
+ * пользователю поехавшие колонки нельзя, и в ход шёл шаблон целиком — вместе
+ * с тем выводом о рынке, который модель сделала правильно.
  *
- * Отличие от `SummaryAgent` одно, и оно про формат. Отчёт по задаче — проза,
- * и испортить её модель может только по смыслу. Сводка — таблица, и у неё
- * есть способ сломаться молча: markdown-таблица вместо блока кода выглядит
- * в ответе модели совершенно нормально, а до пользователя доезжает месивом
- * из палок. Поэтому ответ модели здесь ещё и проверяется — см. {@link
- * looksUnusable}.
+ * Теперь ломаться нечему. Выравнивание держится на подсчёте пробелов, а это
+ * работа для кода; увидеть в цифрах картину и сказать о ней словами — работа
+ * для модели. Отказ модели больше не отменяет сводку: пропадает один абзац,
+ * а таблицы, за которые уже заплачено запросами к двум внешним API,
+ * доезжают до пользователя в любом случае.
  */
 export class MarketOverviewService {
   /**
@@ -25,8 +25,8 @@ export class MarketOverviewService {
    *   tools: ReturnType<typeof import("../tools/index.js").createTools>,
    *   overviewAgent?: import("../agents/MarketOverviewAgent.js").MarketOverviewAgent,
    * }} deps
-   *   Без `overviewAgent` сводка собирается откатом — так поднимаются тесты,
-   *   которым модель не нужна.
+   *   Без `overviewAgent` сводка выходит без комментария — так поднимаются
+   *   тесты, которым модель не нужна.
    */
   constructor({ tools, overviewAgent }) {
     this.tools = tools;
@@ -35,7 +35,7 @@ export class MarketOverviewService {
 
   /**
    * @param {{ limit?: number }} [input]
-   * @returns {Promise<{ ok: true, text: string, composedBy: "model"|"fallback", usage: object }
+   * @returns {Promise<{ ok: true, text: string, commentary: "model"|"none", usage: object }
    *          | { ok: false, error: { code: string } }>}
    */
   async compose({ limit } = {}) {
@@ -49,12 +49,12 @@ export class MarketOverviewService {
       return { ok: false, error: { code: collected.error.code } };
     }
 
-    const written = await this.#write(collected.value);
+    const written = await this.#comment(collected.value);
 
     return {
       ok: true,
-      text: written.text,
-      composedBy: written.composedBy,
+      text: renderMarketOverview(collected.value, { commentary: written.text }),
+      commentary: written.text ? "model" : "none",
       // Меряем всю сборку, а не один вызов модели: пользователь ждал и
       // походов на биржу тоже. Контекстного окна у сводки нет — она не часть
       // диалога, — поэтому в usage только стоимость и время.
@@ -66,61 +66,50 @@ export class MarketOverviewService {
     };
   }
 
-  async #write(overview) {
-    const fallback = () => ({ text: renderMarketOverview(overview), composedBy: "fallback" });
-
-    if (!this.overviewAgent) return fallback();
+  /** @returns {Promise<{ text?: string, promptTokens?: number, completionTokens?: number }>} */
+  async #comment(overview) {
+    if (!this.overviewAgent) return {};
 
     try {
-      const result = await this.overviewAgent.compose(overview);
+      const result = await this.overviewAgent.comment(overview);
       const text = result.content.trim();
 
-      const complaint = looksUnusable(text);
+      const complaint = unusableCommentary(text);
       if (complaint) {
-        // Не ошибка модели в привычном смысле: ответ есть, он связный, но в
-        // мессенджере развалится. Показать вместо него ровную таблицу честнее,
-        // чем отправить пользователю то, что он не сможет прочесть.
-        logError(`Сводка от модели непригодна (${complaint}), показываем таблицу как есть.`);
-        return fallback();
+        logError(`Комментарий модели непригоден (${complaint}), показываем сводку без него.`);
+        return {};
       }
 
       log(
-        `Сводка по рынку собрана моделью (${result.promptTokens ?? 0}+${result.completionTokens ?? 0} токенов).`,
+        `Комментарий к сводке написан моделью (${result.promptTokens ?? 0}+${result.completionTokens ?? 0} токенов).`,
       );
-      return {
-        text,
-        composedBy: "model",
-        promptTokens: result.promptTokens,
-        completionTokens: result.completionTokens,
-      };
+      return { text, promptTokens: result.promptTokens, completionTokens: result.completionTokens };
     } catch (error) {
-      logError("Модель не собрала сводку по рынку, показываем таблицу как есть:", error);
-      return fallback();
+      logError("Модель не написала комментарий к сводке, показываем её без него:", error);
+      return {};
     }
   }
 }
 
+/** Дальше этого комментарий перестаёт быть комментарием и лезет на таблицу. */
+const MAX_COMMENTARY_LENGTH = 700;
+
 /**
- * Проверка ответа модели на пригодность к отправке.
+ * Проверка комментария на пригодность.
  *
- * Не оценивает содержание — только то, переживёт ли ответ дорогу до экрана.
- * Возвращает причину непригодности или `undefined`, если всё в порядке.
+ * Требований мало, и это следствие деления работы: испортить абзац текста
+ * можно только одним способом — перестать быть абзацем текста. Разметка,
+ * которая раньше ломала всю сводку, теперь просто не должна сюда попадать.
  *
  * @param {string} text
+ * @returns {string|undefined} причина непригодности или `undefined`
  */
-export function looksUnusable(text) {
+export function unusableCommentary(text) {
   if (!text) return "пустой ответ";
-
-  const fences = (text.match(/```/g) ?? []).length;
-  if (fences < 2) return "нет блока кода с таблицей";
-  // Нечётное число ограничителей означает незакрытый блок: всё, что после
-  // него, слипнется в один моноширинный кусок.
-  if (fences % 2 !== 0) return "незакрытый блок кода";
-
-  // Палки за пределами блоков кода — это markdown-таблица, которую Telegram
-  // не нарисует. Внутри блока они допустимы: там это просто символы.
-  const outside = text.replace(/```[\s\S]*?```/g, "");
-  if (/^.*\|.*\|.*$/m.test(outside)) return "markdown-таблица вне блока кода";
-
+  if (text.length > MAX_COMMENTARY_LENGTH) return `${text.length} знаков вместо пары фраз`;
+  if (text.includes("```")) return "блок кода вместо текста";
+  // Палки в двух и более местах строки — попытка нарисовать таблицу, хотя её
+  // рисуют без модели. Одиночная палка в тексте безобидна.
+  if (/^.*\|.*\|.*$/m.test(text)) return "таблица вместо текста";
   return undefined;
 }

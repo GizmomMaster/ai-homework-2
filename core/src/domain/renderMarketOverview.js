@@ -22,13 +22,21 @@ const MONTHS = [
 
 /**
  * @param {ReturnType<typeof import("../tools/marketOverview.js").buildMarketOverview> extends Promise<infer T> ? T : never} overview
+ * @param {{ commentary?: string }} [options]
+ *   `commentary` — пара фраз о том, что происходило на рынке; их пишет
+ *   `MarketOverviewAgent`. Единственное место, где модель участвует в сводке:
+ *   всё остальное здесь механическое, а вот увидеть в цифрах картину шаблон
+ *   не умеет. Без комментария сводка остаётся полной — просто без вывода.
  * @returns {string} markdown
  */
-export function renderMarketOverview(overview) {
+export function renderMarketOverview(overview, { commentary } = {}) {
   const { coins, excluded, dayStartMs } = overview;
 
-  const blocks = [
-    `**Крипторынок за ${formatDate(dayStartMs)}**`,
+  const blocks = [`**Крипторынок за ${formatDate(dayStartMs)}**`];
+
+  if (commentary) blocks.push("", commentary);
+
+  blocks.push(
     "",
     "Топ монет по рыночной капитализации, итоги суток (UTC):",
     "",
@@ -37,7 +45,7 @@ export function renderMarketOverview(overview) {
     "**Сейчас**",
     "",
     codeBlock(currentTable(coins)),
-  ];
+  );
 
   const notes = footnotes(coins, excluded);
   if (notes.length > 0) blocks.push("", notes.join("\n"));

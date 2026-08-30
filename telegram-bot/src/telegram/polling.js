@@ -4,6 +4,79 @@ import { sendSafely } from "./send.js";
 
 const DEFAULT_RETRY_DELAY_MS = 5000;
 
+/**
+ * Предел паузы между попытками. Пока Telegram недоступен, смысла долбиться
+ * каждые пять секунд нет: обновления он держит у себя сутки, так что ничего
+ * не теряется, а вот лог за час недоступности разбухает на семьсот записей.
+ * Минута — компромисс: и не шумит, и не задерживает возврат к работе.
+ */
+const MAX_RETRY_DELAY_MS = 60_000;
+
+/**
+ * Причина неудачного `fetch` словами.
+ *
+ * Сам `fetch` бросает «fetch failed» — одинаково для потерянного DNS,
+ * отвергнутого соединения и молчащего хоста. Настоящий код лежит в `cause`,
+ * а при нескольких адресах (IPv6 и IPv4) — в его `errors`.
+ */
+function describeFetchError(error) {
+  const cause = error?.cause;
+  if (!cause) return error?.message ?? String(error);
+
+  const first = Array.isArray(cause.errors) ? cause.errors[0] : cause;
+  const code = first?.code ?? cause.code;
+  return code ? `${error.message} (${code})` : error.message;
+}
+
+/**
+ * Отчёт о неудачах опроса.
+ *
+ * Одна и та же ошибка каждые несколько секунд превращает лог в стену, в
+ * которой не видно ничего другого. Поэтому подробности — только у первой,
+ * дальше короткие отметки: пока пауза растёт, на каждом её удвоении, а когда
+ * она упёрлась в предел — раз в десять попыток.
+ */
+function createFailureReporter(maxDelayMs = MAX_RETRY_DELAY_MS) {
+  let failures = 0;
+  let since = 0;
+
+  return {
+    /** @returns {number} пауза перед следующей попыткой, мс */
+    fail(error, baseDelayMs) {
+      failures += 1;
+      if (failures === 1) since = Date.now();
+
+      const delay = Math.min(baseDelayMs * 2 ** (failures - 1), maxDelayMs);
+      const capped = delay >= maxDelayMs;
+
+      if (failures === 1) {
+        logError("Ошибка получения обновлений от Telegram:", error);
+      } else if (!capped || failures % 10 === 0) {
+        logError(
+          `Telegram недоступен уже ${elapsed(since)} (попыток: ${failures}, ` +
+            `следующая через ${Math.round(delay / 1000)} с): ${describeFetchError(error)}`,
+        );
+      }
+
+      return delay;
+    },
+
+    /** Возврат к работе стоит отметить: иначе в логе видны только неудачи. */
+    recovered() {
+      if (failures === 0) return;
+      log(`Связь с Telegram восстановлена: ${failures} неудачных попыток за ${elapsed(since)}.`);
+      failures = 0;
+    },
+  };
+}
+
+function elapsed(since) {
+  const seconds = Math.round((Date.now() - since) / 1000);
+  if (seconds < 60) return `${seconds} с`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes} мин` : `${Math.floor(minutes / 60)} ч ${minutes % 60} мин`;
+}
+
 const NON_TEXT_WARNING =
   "Я умею обрабатывать только текстовые сообщения. Файлы, изображения, " +
   "голосовые и другие вложения не поддерживаются.";
@@ -25,7 +98,10 @@ const CORE_UNAVAILABLE_TEXT =
  *   maxMessageLength: number,
  *   signal?: AbortSignal,
  *   retryDelayMs?: number,
+ *   maxRetryDelayMs?: number,
  * }} params
+ *   `retryDelayMs` — стартовая пауза после неудачи, `maxRetryDelayMs` — её
+ *   потолок: пауза удваивается с каждой неудачей подряд и упирается в него.
  */
 export async function startPolling({
   telegramClient,
@@ -33,8 +109,10 @@ export async function startPolling({
   maxMessageLength,
   signal,
   retryDelayMs = DEFAULT_RETRY_DELAY_MS,
+  maxRetryDelayMs = MAX_RETRY_DELAY_MS,
 }) {
   let offset = undefined;
+  const failures = createFailureReporter(maxRetryDelayMs);
 
   log("Бот запущен, ожидание сообщений...");
 
@@ -42,10 +120,10 @@ export async function startPolling({
     let updates;
     try {
       updates = await telegramClient.getUpdates({ offset, signal });
+      failures.recovered();
     } catch (error) {
       if (signal?.aborted) break;
-      logError("Ошибка получения обновлений от Telegram:", error);
-      await sleep(retryDelayMs, signal);
+      await sleep(failures.fail(error, retryDelayMs), signal);
       continue;
     }
 

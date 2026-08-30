@@ -12,7 +12,12 @@ import {
  * Запускает polling поверх заглушек Telegram и Core, отдавая управление
  * тестом: подкладывание апдейтов, ожидание и остановку цикла.
  */
-function startTestBot({ maxMessageLength = 1000, coreOptions, retryDelayMs = 10 } = {}) {
+function startTestBot({
+  maxMessageLength = 1000,
+  coreOptions,
+  retryDelayMs = 10,
+  maxRetryDelayMs,
+} = {}) {
   const telegramClient = createFakeTelegramClient();
   const coreClient = createFakeCoreClient(coreOptions);
   const queue = [];
@@ -42,6 +47,7 @@ function startTestBot({ maxMessageLength = 1000, coreOptions, retryDelayMs = 10 
     maxMessageLength,
     signal: controller.signal,
     retryDelayMs,
+    maxRetryDelayMs,
   });
 
   return {
@@ -196,6 +202,64 @@ describe("startPolling", () => {
       });
 
       assert.equal(bot.coreClient.sentMessages[0].text, "привет");
+    });
+
+    it("не пишет полный стек на каждую попытку, пока Telegram недоступен", async (t) => {
+      const errors = [];
+      t.mock.method(console, "error", (...args) => errors.push(args.join(" ")));
+      t.mock.method(console, "log", () => {});
+
+      // Потолок паузы занижен, чтобы прореживание включилось на третьей
+      // попытке, а не на пятой, как с настоящими пятью секундами.
+      const bot = startTestBot({ retryDelayMs: 1, maxRetryDelayMs: 4 });
+      t.after(() => bot.stop());
+
+      const original = bot.telegramClient.getUpdates;
+      let attempts = 0;
+      bot.telegramClient.getUpdates = async (args) => {
+        attempts += 1;
+        if (attempts <= 6) {
+          const error = new TypeError("fetch failed");
+          error.cause = { code: "ETIMEDOUT" };
+          throw error;
+        }
+        return original(args);
+      };
+
+      await waitFor(() => attempts > 6, { label: "бот пережил череду отказов" });
+
+      // Подробности — у первой, дальше короткие отметки: иначе одна и та же
+      // ошибка каждые несколько секунд превращает лог в стену.
+      assert.ok(errors.length < 6, `записей ${errors.length} на 6 отказов`);
+      assert.ok(
+        errors.some((line) => line.includes("ETIMEDOUT")),
+        "код причины должен попасть в лог, а не одно «fetch failed»",
+      );
+    });
+
+    it("отмечает возврат связи", async (t) => {
+      const logs = [];
+      t.mock.method(console, "log", (...args) => logs.push(args.join(" ")));
+      t.mock.method(console, "error", () => {});
+
+      const bot = startTestBot({ retryDelayMs: 1 });
+      t.after(() => bot.stop());
+
+      const original = bot.telegramClient.getUpdates;
+      let failed = false;
+      bot.telegramClient.getUpdates = async (args) => {
+        if (!failed) {
+          failed = true;
+          throw new TypeError("fetch failed");
+        }
+        return original(args);
+      };
+
+      // Без этой записи в логе видны только неудачи, и непонятно, кончились
+      // они или бот всё ещё лежит.
+      await waitFor(() => logs.some((line) => line.includes("восстановлена")), {
+        label: "возврат связи отмечен в логе",
+      });
     });
   });
 

@@ -11,7 +11,7 @@ import {
   yesterdayStartMs,
 } from "../src/tools/marketOverview.js";
 import { renderMarketOverview } from "../src/domain/renderMarketOverview.js";
-import { MarketOverviewService, looksUnusable } from "../src/domain/MarketOverviewService.js";
+import { MarketOverviewService, unusableCommentary } from "../src/domain/MarketOverviewService.js";
 import { buildBrief } from "../src/agents/MarketOverviewAgent.js";
 import { createTools, executeTool, toolNames } from "../src/tools/index.js";
 
@@ -472,7 +472,7 @@ describe("обзор рынка", () => {
     });
   });
 
-  describe("сборка сводки моделью", () => {
+  describe("комментарий модели", () => {
     /** Сервис поверх заглушек: инструмент отдаёт готовые данные. */
     function service(overviewAgent) {
       return new MarketOverviewService({
@@ -481,88 +481,71 @@ describe("обзор рынка", () => {
       });
     }
 
-    it("сводку пишет модель, а не шаблон", async () => {
+    it("вставляет текст модели над таблицей", async () => {
       const agent = createFakeOverviewAgent();
       const result = await service(agent).compose();
 
-      assert.equal(result.composedBy, "model");
-      assert.match(result.text, /Рынок снижался/, "текст модели, а не отката");
+      assert.equal(result.commentary, "model");
+      assert.match(result.text, /Рынок снижался/, "текст модели на месте");
+      assert.match(result.text, /```/, "таблицы всё равно собрал код");
       assert.equal(agent.calls.length, 1);
     });
 
-    it("модель получает данные, а не сырой JSON биржи", async () => {
+    it("модель получает готовые к печати числа", async () => {
       const agent = createFakeOverviewAgent();
       await service(agent).compose();
 
       const brief = buildBrief(agent.calls[0]);
-      assert.match(brief, /BTC \| откр 80249\.59/, "числа приходят готовыми к печати");
+      assert.match(brief, /BTC \| за сутки -3\.00%/);
       assert.match(brief, /28 августа 2026/);
-      assert.match(brief, /ИСКЛЮЧЕНО ИЗ РЕЙТИНГА/);
-      assert.match(brief, /CoinGecko: FIGR_HELOC/);
+      // Пересчёт на модели развёл бы её текст с цифрами в таблице под ним.
+      assert.doesNotMatch(brief, /80249\.59000000/);
     });
 
-    it("отказ модели не теряет уже собранные данные", async (t) => {
+    it("отказ модели стоит одного абзаца, а не всей сводки", async (t) => {
       muteConsole(t);
       const agent = createFakeOverviewAgent(new Error("модель недоступна"));
 
       const result = await service(agent).compose();
 
       assert.equal(result.ok, true);
-      assert.equal(result.composedBy, "fallback");
+      assert.equal(result.commentary, "none");
+      // Данные уже оплачены запросами к двум внешним API — терять их нельзя.
       assert.match(result.text, /Крипторынок за 28 августа 2026/);
+      assert.match(result.text, /```/);
+      assert.match(result.text, /BTC/);
     });
 
-    it("markdown-таблицу от модели заворачивает на откат", async (t) => {
-      muteConsole(t);
-      // Так выглядит самая вероятная ошибка модели: ответ связный и на вид
-      // правильный, но в мессенджере развалится в месиво из палок.
-      const agent = createFakeOverviewAgent({
-        content: "**Крипторынок**\n\n| МОНЕТА | ЦЕНА |\n|---|---|\n| BTC | 78033 |",
-        promptTokens: 1,
-        completionTokens: 1,
-      });
-
-      const result = await service(agent).compose();
-
-      assert.equal(result.composedBy, "fallback");
-      assert.doesNotMatch(result.text.split("```")[0], /\|/);
-    });
-
-    it("ответ без блока кода тоже заворачивает на откат", async (t) => {
-      muteConsole(t);
-      const agent = createFakeOverviewAgent({
-        content: "Рынок снижался, биткоин потерял 3%.",
-        promptTokens: 1,
-        completionTokens: 1,
-      });
-
-      assert.equal((await service(agent).compose()).composedBy, "fallback");
-    });
-
-    it("без агента сводка собирается откатом", async () => {
+    it("без агента сводка выходит без комментария", async () => {
       const result = await service(undefined).compose();
-      assert.equal(result.composedBy, "fallback");
+
+      assert.equal(result.commentary, "none");
+      assert.match(result.text, /Крипторынок/);
     });
 
-    describe("проверка пригодности ответа", () => {
-      it("пропускает ответ с закрытым блоком кода", () => {
-        assert.equal(looksUnusable("текст\n```\nBTC 1\n```"), undefined);
+    describe("проверка комментария", () => {
+      it("пропускает связный абзац", () => {
+        assert.equal(unusableCommentary("Рынок снижался, BTC потерял 3%."), undefined);
       });
 
-      it("ловит одинокий ограничитель", () => {
-        assert.ok(looksUnusable("текст\n```\nBTC 1"));
+      it("отвергает пустой ответ", () => {
+        assert.match(unusableCommentary(""), /пуст/);
       });
 
-      it("ловит незакрытый второй блок", () => {
-        assert.match(looksUnusable("```\nA\n```\nтекст\n```\nB"), /незакрыт/);
+      it("отвергает блок кода: таблицу рисуют без модели", () => {
+        assert.match(unusableCommentary("Рынок упал\n```\nBTC 1\n```"), /блок кода/);
       });
 
-      it("палки внутри блока кода допустимы", () => {
-        assert.equal(looksUnusable("```\nBTC | 1 | 2\n```"), undefined);
+      it("отвергает попытку нарисовать таблицу палками", () => {
+        assert.match(unusableCommentary("| BTC | -3% |"), /таблица/);
       });
 
-      it("пустой ответ непригоден", () => {
-        assert.match(looksUnusable(""), /пуст/);
+      it("одиночная палка в тексте безобидна", () => {
+        assert.equal(unusableCommentary("Рынок упал | заметно"), undefined);
+      });
+
+      it("отвергает простыню вместо пары фраз", () => {
+        assert.match(unusableCommentary("а".repeat(800)), /вместо пары фраз/);
       });
     });
   });
@@ -581,7 +564,7 @@ describe("обзор рынка", () => {
       };
     }
 
-    it("отдаёт текст, собранный моделью", async () => {
+    it("отдаёт сводку с комментарием модели", async () => {
       core = await startCoreApp({
         tools: overviewTools(async () => OVERVIEW),
         overviewAgent: createFakeOverviewAgent(),
@@ -590,12 +573,12 @@ describe("обзор рынка", () => {
       const response = await core.request("GET", "/v1/market/overview");
 
       assert.equal(response.status, 200);
-      assert.equal(response.json.composedBy, "model");
+      assert.equal(response.json.commentary, "model");
       assert.match(response.json.text, /Рынок снижался/);
       assert.match(response.json.text, /```/, "таблицы должны приехать блоками кода");
     });
 
-    it("при отказе модели отдаёт откат, а не ошибку", async (t) => {
+    it("при отказе модели отдаёт сводку без комментария, а не ошибку", async (t) => {
       muteConsole(t);
       core = await startCoreApp({
         tools: overviewTools(async () => OVERVIEW),
@@ -605,7 +588,7 @@ describe("обзор рынка", () => {
       const response = await core.request("GET", "/v1/market/overview");
 
       assert.equal(response.status, 200);
-      assert.equal(response.json.composedBy, "fallback");
+      assert.equal(response.json.commentary, "none");
       assert.match(response.json.text, /Крипторынок за 28 августа 2026/);
     });
 

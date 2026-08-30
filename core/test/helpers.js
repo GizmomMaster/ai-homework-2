@@ -193,12 +193,12 @@ export function createFakeSummaryAgent(
 }
 
 /**
- * Заглушка агента сводки по рынку. По умолчанию отвечает пригодным текстом —
- * с таблицей в блоке кода, как того требует `looksUnusable`.
+ * Заглушка агента комментария к сводке. По умолчанию отвечает связным
+ * абзацем — таблицы модель больше не пишет, их собирает код.
  */
 export function createFakeOverviewAgent(
   reply = {
-    content: "**Крипторынок**\n\nРынок снижался.\n\n```\nМОНЕТА   ЦЕНА\nBTC     78033.00\n```",
+    content: "Рынок снижался: BTC потерял 3.00%, из общей картины выбился TRX (+1.10%).",
     promptTokens: 400,
     completionTokens: 90,
   },
@@ -206,7 +206,7 @@ export function createFakeOverviewAgent(
   const calls = [];
   return {
     calls,
-    async compose(overview) {
+    async comment(overview) {
       calls.push(overview);
       const value = typeof reply === "function" ? reply(overview) : reply;
       if (value instanceof Error) throw value;

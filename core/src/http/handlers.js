@@ -48,7 +48,7 @@ export function createHandlers({
 
       return {
         status: 200,
-        json: { text: result.text, composedBy: result.composedBy, usage: result.usage },
+        json: { text: result.text, commentary: result.commentary, usage: result.usage },
       };
     },
 
