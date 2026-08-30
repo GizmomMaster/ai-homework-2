@@ -296,6 +296,37 @@ describe("DialogService", () => {
       assert.equal(outcome.usage.completionTokens, 108);
     });
 
+    it("размер диалога растёт на оценку обмена — модель его не измеряла", async () => {
+      const ctx = task({
+        plan: onePlan,
+        summary: { content: "Биткоин стоит 79 363.81 USDT.", promptTokens: 500, completionTokens: 60 },
+      });
+
+      const outcome = await ctx.process("цена BTC?");
+
+      // Оценка, а не ноль: обмен уходит в историю и в следующем промпте место
+      // займёт настоящее. Числа сводящего агента сюда не идут — он считал свой
+      // промпт (данные шагов), а не диалог.
+      assert.ok(outcome.usage.totalTokens > 0);
+      assert.ok(outcome.usage.totalTokens < 100, `оценка обмена, а не промпт сводки: ${outcome.usage.totalTokens}`);
+      assert.equal(outcome.historyEntry.totalTokens, outcome.usage.totalTokens);
+    });
+
+    it("диалог из одних задач заполняет контекст, а не числится пустым", async () => {
+      // Окно нарочно крошечное: важно, что счётчик до него вообще доходит.
+      const ctx = task({ plan: onePlan, contextWindowTokens: 20 });
+
+      ctx.commit(await ctx.process("цена BTC?"));
+      const first = ctx.chatRepository.getOrCreateActiveSession(ctx.conversationId).totalTokens;
+      ctx.commit(await ctx.process("а ETH?"));
+
+      assert.ok(
+        ctx.chatRepository.getOrCreateActiveSession(ctx.conversationId).totalTokens > first,
+        "иначе счётчик застревает на нуле, пока не придёт теоретический вопрос",
+      );
+      assert.equal((await ctx.process("а SOL?")).reason, REJECT_REASON.contextLimit);
+    });
+
     it("отчёт попадает в историю — следующий вопрос опирается на показанное", async () => {
       const ctx = task({ plan: onePlan });
 
