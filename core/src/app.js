@@ -36,7 +36,7 @@ import { log } from "./logger.js";
  *
  * @param {{ enabled: boolean, scriptPath: string, timeoutMs?: number }} settings
  */
-function resolveRsi({ enabled, ...settings } = {}) {
+export function resolveRsi({ enabled, ...settings } = {}) {
   if (!enabled) return undefined;
 
   const pythonBin = findRsiPython();
