@@ -2,7 +2,9 @@ import { createDatabase } from "./db/database.js";
 import { ChatRepository } from "./db/chatRepository.js";
 import { JobRepository } from "./db/jobRepository.js";
 import { createLlmRunner } from "./llm/index.js";
-import { DialogService } from "./domain/DialogService.js";
+import { DialogService, PROGRESS_STAGE } from "./domain/DialogService.js";
+import { initTelemetry } from "./telemetry/recorder.js";
+import { InstrumentedLlmRunner } from "./telemetry/InstrumentedLlmRunner.js";
 import { RouterAgent } from "./agents/RouterAgent.js";
 import { TheoryAgent } from "./agents/TheoryAgent.js";
 import { PlannerAgent } from "./agents/PlannerAgent.js";
@@ -83,8 +85,17 @@ export function createApp({
   const db = createDatabase(config.sqlitePath);
   const chatRepository = new ChatRepository(db);
   const jobRepository = new JobRepository(db);
+  initTelemetry(db, { pricing: config.telemetry.pricing });
 
   const runner = llmRunner ?? createLlmRunner(config);
+  const runnerLabels = { provider: config.llmProvider, model: config[config.llmProvider]?.model };
+  // Один экземпляр InstrumentedLlmRunner на агента: agentId/stage помечают,
+  // кто именно потратил токены, — сам runner при этом общий и не меняется
+  // (см. core/src/telemetry/InstrumentedLlmRunner.js). Оборачивает только
+  // раннер по умолчанию: агент, переданный явно (тесты — фейками), уже
+  // собран вызывающим кодом и телеметрию не увидит.
+  const instrumented = (agentId, stage) =>
+    new InstrumentedLlmRunner(runner, { agentId, stage, ...runnerLabels });
   // Свой fetch, а не общий с доставкой callback'ов: это разные направления
   // и разные подмены в тестах — заглушка адаптера ждёт тело запроса, которого
   // у GET к бирже нет.
@@ -104,12 +115,17 @@ export function createApp({
 
   const dialogService = new DialogService({
     chatRepository,
-    routerAgent: routerAgent ?? new RouterAgent({ llmRunner: runner }),
-    theoryAgent: theoryAgent ?? new TheoryAgent({ llmRunner: runner }),
+    routerAgent: routerAgent ?? new RouterAgent({ llmRunner: instrumented("router", PROGRESS_STAGE.routing) }),
+    theoryAgent: theoryAgent ?? new TheoryAgent({ llmRunner: instrumented("theory", PROGRESS_STAGE.answering) }),
     plannerAgent:
-      plannerAgent ?? new PlannerAgent({ llmRunner: runner, tools: marketTools, skills: loadSkills(config.skillsDir) }),
+      plannerAgent ??
+      new PlannerAgent({
+        llmRunner: instrumented("planner", PROGRESS_STAGE.planning),
+        tools: marketTools,
+        skills: loadSkills(config.skillsDir),
+      }),
     planExecutor: planExecutor ?? new PlanExecutor({ tools: marketTools }),
-    summaryAgent: summaryAgent ?? new SummaryAgent({ llmRunner: runner }),
+    summaryAgent: summaryAgent ?? new SummaryAgent({ llmRunner: instrumented("summary", PROGRESS_STAGE.summarizing) }),
     contextWindowTokens: config.contextWindowTokens,
   });
 
@@ -136,7 +152,9 @@ export function createApp({
 
   const marketOverviewService = new MarketOverviewService({
     tools: marketTools,
-    overviewAgent: overviewAgent ?? new MarketOverviewAgent({ llmRunner: runner }),
+    // Не часть конвейера заданий (см. PROGRESS_STAGE) — /start отвечает
+    // синхронно, поэтому здесь собственная метка стадии, а не одна из них.
+    overviewAgent: overviewAgent ?? new MarketOverviewAgent({ llmRunner: instrumented("market_overview", "market_overview") }),
   });
 
   const router = createRoutes(

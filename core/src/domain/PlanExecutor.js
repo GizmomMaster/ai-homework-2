@@ -1,5 +1,7 @@
 import { executeTool } from "../tools/index.js";
 import { log } from "../logger.js";
+import { recordToolCall } from "../telemetry/recorder.js";
+import { estimateExchangeTokens } from "./estimateTokens.js";
 
 /**
  * Сколько шагов выполнять одновременно.
@@ -58,6 +60,7 @@ export class PlanExecutor {
 
     const steps = await mapWithConcurrency(plan, CONCURRENCY, async (step, index) => {
       const stepStartedAt = Date.now();
+      const inputJson = JSON.stringify(step.parameters ?? {});
       const outcome = await executeTool(this.tools, step.toolToUse, step.parameters ?? {});
       const took = Date.now() - stepStartedAt;
 
@@ -65,6 +68,18 @@ export class PlanExecutor {
         `[шаг ${index + 1}] ${step.toolToUse}: ` +
           `${outcome.ok ? "готово" : `отказ (${outcome.error.code})`} за ${took} мс.`,
       );
+
+      const outputJson = JSON.stringify(outcome.ok ? outcome.value : outcome.error);
+      recordToolCall({
+        toolName: step.toolToUse,
+        stepNumber: index + 1,
+        inputSize: Buffer.byteLength(inputJson),
+        outputSize: Buffer.byteLength(outputJson),
+        outputTokensEstimate: estimateExchangeTokens(outputJson),
+        durationMs: took,
+        ok: outcome.ok,
+        errorCode: outcome.ok ? undefined : outcome.error.code,
+      });
 
       const result = {
         stepNumber: index + 1,

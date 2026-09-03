@@ -19,6 +19,20 @@ function positiveInt(name, defaultValue) {
   return value;
 }
 
+/** Цена — дробное число, не обязательно целое, и ноль допустим (бесплатный ориентир). */
+function nonNegativeNumber(name, defaultValue) {
+  const raw = process.env[name];
+  if (!raw) return defaultValue;
+
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(
+      `Переменная окружения ${name} должна быть неотрицательным числом, получено: "${raw}".`,
+    );
+  }
+  return value;
+}
+
 /**
  * Режим «размышления» гибридных reasoning-моделей (Qwen3 и подобных).
  * Значение "omit" убирает поле из запроса: модели без поддержки размышления
@@ -153,6 +167,22 @@ export const config = {
    * дописываются в промпт планировщика (см. src/skills/index.js).
    */
   skillsDir: join(projectRoot, "skills"),
+
+  /**
+   * Телеметрия вызовов модели и инструментов (core/src/telemetry).
+   *
+   * Цена — величина условная: модель локальная (LM Studio/Ollama на своей
+   * видеокарте) и в эксплуатации бесплатна. Дефолт — ориентировочная цена
+   * сопоставимого по классу облачного API, чтобы дашборд и отчёт показывали,
+   * во что вылилась бы такая нагрузка, если бы считалась не на своём железе,
+   * а не реальный счёт за инференс.
+   */
+  telemetry: {
+    pricing: {
+      inputPerMillion: nonNegativeNumber("TELEMETRY_PRICE_INPUT_PER_1M", 3),
+      outputPerMillion: nonNegativeNumber("TELEMETRY_PRICE_OUTPUT_PER_1M", 15),
+    },
+  },
 
   jobs: {
     pollIntervalMs: positiveInt("JOB_POLL_INTERVAL_MS", 500),

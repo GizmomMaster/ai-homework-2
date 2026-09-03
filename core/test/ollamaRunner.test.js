@@ -182,6 +182,7 @@ describe("OllamaRunner", () => {
         content: "ответ модели",
         promptTokens: 120,
         completionTokens: 30,
+        reasoningTokens: 0,
       });
     });
 
@@ -194,6 +195,7 @@ describe("OllamaRunner", () => {
         content: "ответ",
         promptTokens: 0,
         completionTokens: 0,
+        reasoningTokens: 0,
       });
     });
   });
@@ -243,6 +245,7 @@ describe("OllamaRunner", () => {
         content: "Ответ",
         promptTokens: 11,
         completionTokens: 22,
+        reasoningTokens: 10,
       });
     });
   });

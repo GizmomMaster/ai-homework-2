@@ -1,4 +1,5 @@
 import { log, logError } from "../logger.js";
+import { runInJob } from "../telemetry/context.js";
 
 /**
  * Обрабатывает задания и доставляет результаты адаптерам.
@@ -128,11 +129,17 @@ export class JobRunner {
         ? (progress) => this.progressNotifier.notify(job, conversation, progress)
         : undefined;
 
-    const outcome = await this.dialogService.process({
-      conversationId: job.conversationId,
-      text: job.requestText,
-      onProgress,
-    });
+    // DialogService и агенты глубоко внутри него не знают job.id — телеметрия
+    // (InstrumentedLlmRunner, PlanExecutor) читает его из этого контекста, а
+    // не принимает через конструктор, чтобы не тянуть job_id через сигнатуры
+    // доменных классов, которые про задания ничего не знают (см. core/src/telemetry/context.js).
+    const outcome = await runInJob({ jobId: job.id, conversationId: job.conversationId }, () =>
+      this.dialogService.process({
+        conversationId: job.conversationId,
+        text: job.requestText,
+        onProgress,
+      }),
+    );
 
     const took = Date.now() - startedAt;
     // Время кладём в usage до записи: оттуда оно попадёт и в БД, и в callback
