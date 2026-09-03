@@ -20,11 +20,10 @@ function withFooter(text, usage) {
  *
  * @param {{ reason?: string, usage?: object }} payload
  */
-function rejectionText({ reason, usage }) {
+function rejectionText({ reason }) {
   if (reason === "context_limit") {
-    const filled = usage ? ` (${usage.totalTokens}/${usage.contextLimit} токенов)` : "";
     return (
-      `Контекстное окно диалога заполнено${filled}. ` +
+      `Контекстное окно диалога заполнено. ` +
       `Начните новый диалог командой /new, чтобы продолжить общение.`
     );
   }
@@ -123,11 +122,10 @@ export async function handleReply({ payload, telegramClient, progressTracker }) 
     // Ответ прошёл, но контекст заполнился — предупреждаем сразу, чтобы
     // следующий вопрос не упёрся в отказ без объяснений.
     if (isContextFull(payload.usage)) {
-      const { totalTokens, contextLimit } = payload.usage;
       await telegramClient.sendMessage({
         chatId,
         text:
-          `Контекстное окно диалога заполнено (${totalTokens}/${contextLimit} токенов). ` +
+          `Контекстное окно диалога заполнено. ` +
           `Для продолжения общения начните новый диалог командой /new.`,
       });
     }

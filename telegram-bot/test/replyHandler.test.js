@@ -49,7 +49,6 @@ describe("handleReply", () => {
 
       assert.equal(ctx.telegramClient.sent.length, 2, "ответ модели + предупреждение");
       assert.match(ctx.telegramClient.lastText(), /\/new/);
-      assert.match(ctx.telegramClient.lastText(), /130\/120/);
     });
 
     it("не предупреждает, пока контекст не заполнен", async (t) => {
@@ -85,7 +84,7 @@ describe("handleReply", () => {
   });
 
   describe("отказ по лимиту контекста", () => {
-    it("просит начать новый диалог и показывает заполнение", async (t) => {
+    it("просит начать новый диалог", async (t) => {
       muteConsole(t);
       const ctx = deliver({
         status: "rejected",
@@ -95,9 +94,7 @@ describe("handleReply", () => {
 
       await ctx.run();
 
-      const text = ctx.telegramClient.lastText();
-      assert.match(text, /\/new/);
-      assert.match(text, /4952\/5000/);
+      assert.match(ctx.telegramClient.lastText(), /\/new/);
     });
 
     it("обходится без цифр, если статистики нет", async (t) => {
