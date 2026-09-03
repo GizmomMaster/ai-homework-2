@@ -12,7 +12,9 @@ import { renderReport } from "../src/domain/renderReport.js";
 import { BinanceClient } from "../src/tools/BinanceClient.js";
 import { createTools } from "../src/tools/index.js";
 import { LLM_ERROR } from "../src/llm/LlmRunner.js";
-import { createFakeLlmRunner } from "./helpers.js";
+import { createFakeLlmRunner, createTestRepositories } from "./helpers.js";
+import { initTelemetry } from "../src/telemetry/recorder.js";
+import { runInJob } from "../src/telemetry/context.js";
 
 const tools = createTools({ binance: new BinanceClient({ baseUrl: "http://binance.test" }) });
 
@@ -136,6 +138,21 @@ describe("PlannerAgent", () => {
       assert.equal(result.truncated, true);
     });
 
+    it("обрезает длинные исторические реплики, но не текущий вопрос", async () => {
+      const llmRunner = runnerReturning(plan);
+      const longReport = "Сводка по рынку. ".repeat(50);
+
+      await new PlannerAgent({ llmRunner, tools }).plan({
+        history: [{ role: "assistant", content: longReport }],
+        text: "а что по SOL?",
+      });
+
+      const sent = llmRunner.calls[0];
+      const historyMessage = sent.find((m) => m.content !== "а что по SOL?" && m.role !== "system");
+      assert.ok(historyMessage.content.length < longReport.length);
+      assert.equal(sent.at(-1).content, "а что по SOL?");
+    });
+
     it("неразбираемый ответ — llm_bad_response", async () => {
       const llmRunner = createFakeLlmRunner({
         content: "не смог",
@@ -182,6 +199,42 @@ describe("PlanExecutor", () => {
     assert.deepEqual(result.steps.map((s) => s.value.n), [1, 2, 3]);
     assert.deepEqual(result.steps.map((s) => s.stepNumber), [1, 2, 3]);
     assert.equal(result.succeeded, 3);
+  });
+
+  it("пишет телеметрию по каждому шагу", async () => {
+    const { db } = createTestRepositories();
+    initTelemetry(db);
+    const executor = new PlanExecutor({
+      tools: {
+        ...toolbox(async ({ n }) => ({ n })),
+        broken: {
+          description: "тест",
+          parameters: {},
+          required: [],
+          run: async () => {
+            throw new Error("бум");
+          },
+        },
+      },
+    });
+
+    await runInJob({ jobId: "job-telemetry", conversationId: 1 }, () =>
+      executor.run([
+        { action: "первый", toolToUse: "probe", parameters: { n: 1 } },
+        { action: "сломанный", toolToUse: "broken", parameters: {} },
+      ]),
+    );
+
+    const rows = db
+      .prepare("SELECT * FROM tool_calls WHERE job_id = 'job-telemetry' ORDER BY step_number")
+      .all();
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].tool_name, "probe");
+    assert.equal(rows[0].ok, 1);
+    assert.ok(rows[0].output_tokens_estimate > 0);
+    assert.equal(rows[1].tool_name, "broken");
+    assert.equal(rows[1].ok, 0);
+    assert.equal(rows[1].error_code, "upstream_error");
   });
 
   it("порядок сохраняется, даже когда шаги завершаются вразнобой", async () => {

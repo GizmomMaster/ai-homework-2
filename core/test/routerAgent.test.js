@@ -17,7 +17,6 @@ const verdict = {
   confidence: 0.9,
   topicSummary: "цена BTC",
   clarificationQuestion: null,
-  outOfScopeReason: null,
 };
 
 /** Заглушка модели, отвечающая заданным JSON. */
@@ -69,6 +68,21 @@ describe("RouterAgent", () => {
       await new RouterAgent({ llmRunner }).classify({ history, text: "второй" });
 
       assert.equal(llmRunner.calls[0].length, 3);
+    });
+
+    it("обрезает длинные исторические реплики (прошлые отчёты), но не текущий вопрос", async () => {
+      const llmRunner = runnerReturning(verdict);
+      const longReport = "Сводка по рынку. ".repeat(50);
+      const history = [
+        { role: "user", content: "покажи BTC" },
+        { role: "assistant", content: longReport },
+      ];
+
+      await new RouterAgent({ llmRunner }).classify({ history, text: "а что по ETH?" });
+
+      const sent = llmRunner.calls[0];
+      assert.ok(sent[2].content.length < longReport.length, "прошлый отчёт должен быть обрезан");
+      assert.equal(sent.at(-1).content, "а что по ETH?", "текущий вопрос обрезке не подлежит");
     });
   });
 
@@ -134,6 +148,17 @@ describe("RouterAgent", () => {
 
     it("промпт содержит правило, отобранное замером", () => {
       assert.match(ROUTER_PROMPT, /УТОЧНЯЮЩИЕ ПРАВИЛА/);
+    });
+
+    it("не просит модель генерировать поля, которые никто не читает", () => {
+      // reasoning и outOfScopeReason из спецификации никем не используются:
+      // DialogService их не читает, а причину OUT_OF_SCOPE формулирует
+      // адаптер по коду. Каждое такое поле — токены генерации на каждый
+      // вызов маршрутизатора без всякой пользы.
+      assert.equal(ROUTER_SCHEMA.properties.reasoning, undefined);
+      assert.equal(ROUTER_SCHEMA.properties.outOfScopeReason, undefined);
+      assert.doesNotMatch(ROUTER_PROMPT, /"reasoning"/);
+      assert.doesNotMatch(ROUTER_PROMPT, /"outOfScopeReason"/);
     });
 
     it("валидатор отвергает не-объекты", () => {

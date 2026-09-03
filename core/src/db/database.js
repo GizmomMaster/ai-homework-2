@@ -75,6 +75,50 @@ export function createDatabase(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status, id);
     CREATE INDEX IF NOT EXISTS idx_jobs_delivery
       ON jobs (delivered_at, next_attempt_at);
+
+    -- Телеметрия обращений к модели: одна строка на вызов LlmRunner.chat().
+    -- job_id без FOREIGN KEY на jobs — token-benchmark.mjs и eval-скрипты
+    -- пишут телеметрию вызовов, для которых задания в БД нет вовсе.
+    CREATE TABLE IF NOT EXISTS llm_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT,
+      agent_id TEXT NOT NULL,
+      stage TEXT NOT NULL,
+      turn_number INTEGER NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL,
+      completion_tokens INTEGER NOT NULL,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      repeated_prompt_tokens_estimate INTEGER NOT NULL DEFAULT 0,
+      latency_ms INTEGER NOT NULL,
+      estimated_cost_usd REAL NOT NULL DEFAULT 0,
+      ok INTEGER NOT NULL,
+      error_code TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_job ON llm_calls (job_id, turn_number);
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_created ON llm_calls (created_at);
+
+    -- Телеметрия вызовов инструментов: одна строка на executeTool() в PlanExecutor.
+    CREATE TABLE IF NOT EXISTS tool_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT,
+      tool_name TEXT NOT NULL,
+      turn_number INTEGER NOT NULL,
+      step_number INTEGER,
+      input_size INTEGER NOT NULL,
+      output_size INTEGER NOT NULL,
+      output_tokens_estimate INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      ok INTEGER NOT NULL,
+      error_code TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tool_calls_job ON tool_calls (job_id, turn_number);
+    CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls (created_at);
   `);
 
   return db;

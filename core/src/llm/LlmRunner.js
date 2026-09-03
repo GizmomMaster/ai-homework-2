@@ -32,6 +32,11 @@
  * @property {string} content Текст ответа модели.
  * @property {number} promptTokens Число токенов истории/промпта (по данным модели).
  * @property {number} completionTokens Число токенов сгенерированного ответа.
+ * @property {number} [reasoningTokens]
+ *   Оценка длины вырезанного блока `<think>…</think>` в токенах (см.
+ *   `stripThinking`). Ни Ollama, ни LM Studio не отдают reasoning-токены
+ *   отдельным полем `usage`, поэтому это оценка по длине текста, а не точное
+ *   значение модели, — используется только телеметрией (core/src/telemetry).
  *
  * @typedef {Object} LlmRunner
  * @property {(messages: ChatMessage[], options?: ChatOptions) => Promise<ChatResult>} chat

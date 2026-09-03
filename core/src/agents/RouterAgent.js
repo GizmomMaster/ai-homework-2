@@ -1,4 +1,5 @@
 import { JsonAgent } from "./JsonAgent.js";
+import { truncateForClassifier } from "../domain/classifierContext.js";
 
 /** Категории запроса из §2 спецификации. */
 export const ROUTER_INTENT = {
@@ -21,6 +22,14 @@ export const ROUTER_CONTEXT_MESSAGES = 6;
 /**
  * Схема ответа из §2. Уходит в раннер и ограничивает генерацию грамматикой:
  * `intent` вне перечисления сгенерировать невозможно.
+ *
+ * Без `reasoning` и `outOfScopeReason` — оба поля из спецификации, но ни
+ * одно не читает ни Core, ни адаптер: `DialogService` использует только
+ * `intent`, `confidence`, `topicSummary` и `clarificationQuestion`, а причину
+ * отказа OUT_OF_SCOPE формулирует адаптер по коду, а не по тексту модели
+ * (см. REJECT_REASON в DialogService.js). Каждое такое поле — это токены
+ * генерации, оплаченные на каждый вызов маршрутизатора и никогда не
+ * прочитанные; тот же приём уже применён к схеме плана в PlannerAgent.js.
  */
 export const ROUTER_SCHEMA = {
   type: "object",
@@ -29,9 +38,7 @@ export const ROUTER_SCHEMA = {
     isCryptoRelated: { type: "boolean" },
     confidence: { type: "number" },
     topicSummary: { type: "string" },
-    reasoning: { type: "string" },
     clarificationQuestion: { type: ["string", "null"] },
-    outOfScopeReason: { type: ["string", "null"] },
   },
   required: ["intent", "isCryptoRelated", "confidence", "topicSummary"],
 };
@@ -69,9 +76,7 @@ export const ROUTER_PROMPT = `Ты — Агент-Маршрутизатор (Ro
   "isCryptoRelated": true | false,
   "confidence": 0.0 - 1.0,
   "topicSummary": "Краткая суть темы (до 10 слов)",
-  "reasoning": "Краткое обоснование выбора категории",
-  "clarificationQuestion": "Вопрос для уточнения (только если intent == CLARIFICATION_NEEDED, иначе null)",
-  "outOfScopeReason": "Причина отказа (только если intent == OUT_OF_SCOPE, иначе null)"
+  "clarificationQuestion": "Вопрос для уточнения (только если intent == CLARIFICATION_NEEDED, иначе null)"
 }
 
 УТОЧНЯЮЩИЕ ПРАВИЛА (имеют приоритет над примерами выше):
@@ -112,14 +117,13 @@ export class RouterAgent {
    *   confidence: number,
    *   topicSummary: string,
    *   clarificationQuestion?: string|null,
-   *   outOfScopeReason?: string|null,
    *   usage: { promptTokens: number, completionTokens: number },
    * }>}
    * @throws {import("../llm/LlmRunner.js").LlmError}
    */
   async classify({ history, text }) {
     const { value, usage } = await this.agent.run([
-      ...history.slice(-ROUTER_CONTEXT_MESSAGES),
+      ...truncateForClassifier(history.slice(-ROUTER_CONTEXT_MESSAGES)),
       { role: "user", content: text },
     ]);
     return { ...value, usage };

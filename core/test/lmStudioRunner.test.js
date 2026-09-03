@@ -144,6 +144,7 @@ describe("LmStudioRunner", () => {
         content: "ответ модели",
         promptTokens: 120,
         completionTokens: 30,
+        reasoningTokens: 0,
       });
     });
 
@@ -156,6 +157,7 @@ describe("LmStudioRunner", () => {
         content: "ответ",
         promptTokens: 0,
         completionTokens: 0,
+        reasoningTokens: 0,
       });
     });
   });
@@ -170,6 +172,17 @@ describe("LmStudioRunner", () => {
       }));
 
       assert.equal((await runner.chat(messages)).content, "Ответ");
+    });
+
+    it("оценивает длину вырезанного блока в reasoningTokens", async () => {
+      const runner = await connect(() => ({
+        json: {
+          choices: [{ message: { role: "assistant", content: "<think>ага</think>Ответ" } }],
+          usage: { prompt_tokens: 10, completion_tokens: 40 },
+        },
+      }));
+
+      assert.equal((await runner.chat(messages)).reasoningTokens, 10);
     });
 
     it("ответ целиком из размышления → код llm_bad_response", async () => {

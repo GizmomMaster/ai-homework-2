@@ -127,7 +127,7 @@ export class OllamaRunner {
       );
     }
 
-    const content = stripThinking(data.message.content);
+    const { content, reasoningTokens } = stripThinking(data.message.content);
     if (!content) {
       // Пустой ответ ничем не поможет ни пользователю, ни планировщику: чаще
       // всего это значит, что модель израсходовала всю генерацию на
@@ -150,6 +150,7 @@ export class OllamaRunner {
       content,
       promptTokens: data.prompt_eval_count ?? 0,
       completionTokens: data.eval_count ?? 0,
+      reasoningTokens,
     };
   }
 }

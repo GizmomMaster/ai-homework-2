@@ -1,4 +1,5 @@
 import { JsonAgent } from "./JsonAgent.js";
+import { truncateForClassifier } from "../domain/classifierContext.js";
 
 /**
  * Потолок на число шагов. Без него модель способна напланировать два десятка
@@ -155,7 +156,7 @@ export class PlannerAgent {
    */
   async plan({ history, text }) {
     const { value, usage } = await this.agent.run([
-      ...history.slice(-PLANNER_CONTEXT_MESSAGES),
+      ...truncateForClassifier(history.slice(-PLANNER_CONTEXT_MESSAGES)),
       { role: "user", content: text },
     ]);
 

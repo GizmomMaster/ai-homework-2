@@ -32,6 +32,9 @@ export function testConfig(overrides = {}) {
       deliveryBackoffMs: 20,
       deliveryTimeoutMs: 500,
     },
+    // Нулевая цена: тесты про стоимость не спрашивают, а сравнение с нулём
+    // проще, чем с условным ориентиром.
+    telemetry: { pricing: { inputPerMillion: 0, outputPerMillion: 0 } },
     callbackUrls: { telegram: "http://adapter.test/callbacks/replies" },
     ...overrides,
   };

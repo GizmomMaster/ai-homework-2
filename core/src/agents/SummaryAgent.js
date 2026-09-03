@@ -57,12 +57,64 @@ export class SummaryAgent extends TextAgent {
 }
 
 /**
+ * Одна и та же величина под разными именами в ответах разных инструментов.
+ * `get_crypto_current_price` и `get_crypto_24h_ticker_stats` по одному
+ * символу частично пересекаются по смыслу (текущая цена, суточное
+ * изменение, суточный максимум/минимум) — но Binance называет их в двух
+ * эндпоинтах по-разному, поэтому пересечение не поймать сравнением по
+ * имени поля, только по значению после приведения имени к общему виду.
+ * Значение при этом остаётся под тем именем, которым его назвал первый
+ * увидевший его шаг, — второе имя просто не добавляется.
+ */
+const FIELD_ALIASES = {
+  lastPrice: "price",
+  priceChangePercent: "priceChangePercent24h",
+  high: "high24h",
+  low: "low24h",
+};
+
+/**
+ * Убирает из результатов шагов поля, значение которых по той же монете уже
+ * показано более ранним шагом — в том числе под другим именем (см.
+ * FIELD_ALIASES). Планировщик не обязан думать о таких пересечениях между
+ * инструментами: если оба шага попали в план, `SummaryAgent` иначе показал
+ * бы модели одно и то же число дважды.
+ *
+ * Дедуп применяется только к примитивным полям: `symbol` никогда не
+ * трогаем (иначе непонятно, к какой монете относится остаток полей), а
+ * сложные значения (массивы свечей и т.п.) сравнением по `===` не поймать —
+ * и не нужно, для них это уже делает compactForPrompt.
+ *
+ * @param {Array<{ ok: boolean, value?: object }>} steps
+ */
+export function dedupeStepValues(steps) {
+  const seen = new Map();
+
+  return steps.map((step) => {
+    if (!step.ok || step.value === null || typeof step.value !== "object") return step;
+    const { symbol } = step.value;
+    if (!symbol) return step;
+
+    const value = {};
+    for (const [key, item] of Object.entries(step.value)) {
+      const dedupeKey = `${symbol}:${FIELD_ALIASES[key] ?? key}`;
+      if (key !== "symbol" && seen.has(dedupeKey) && seen.get(dedupeKey) === item) continue;
+      value[key] = item;
+      seen.set(dedupeKey, item);
+    }
+    return { ...step, value };
+  });
+}
+
+/**
  * Задание для модели: вопрос, задача и собранные данные. Неудачные шаги
  * перечисляются наравне с удачными — модель должна знать, чего не хватает,
  * иначе оговорка о неполноте в отчёт не попадёт.
  */
 export function buildBrief({ question, taskSummary, steps }) {
-  const collected = steps
+  const deduped = dedupeStepValues(steps);
+
+  const collected = deduped
     .filter((step) => step.ok)
     .map((step) => `${step.action}:\n${JSON.stringify(compactForPrompt(step.value), null, 1)}`)
     .join("\n\n");
@@ -71,7 +123,7 @@ export function buildBrief({ question, taskSummary, steps }) {
   // просто неудачей. «RSI считается только для BTC и ETH» — это то, что
   // пользователь и должен прочитать; без причины модель напишет размытое «не
   // удалось получить данные» и подменит ответ отговоркой.
-  const missing = steps
+  const missing = deduped
     .filter((step) => !step.ok)
     .map((step) => (step.error?.message ? `- ${step.action}: ${step.error.message}` : `- ${step.action}`))
     .join("\n");

@@ -100,7 +100,7 @@ export class LmStudioRunner {
       );
     }
 
-    const content = stripThinking(message.content);
+    const { content, reasoningTokens } = stripThinking(message.content);
     if (!content) {
       // Пустой ответ ничем не поможет ни пользователю, ни планировщику: чаще
       // всего это значит, что модель израсходовала всю генерацию на
@@ -123,6 +123,7 @@ export class LmStudioRunner {
       content,
       promptTokens: data.usage?.prompt_tokens ?? 0,
       completionTokens: data.usage?.completion_tokens ?? 0,
+      reasoningTokens,
     };
   }
 }
