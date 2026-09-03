@@ -1,12 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BinanceClient } from "../src/tools/BinanceClient.js";
 import { TtlCache } from "../src/tools/cache.js";
-import { TOOL_ERROR, RSI_TOOL, createTools, executeTool, toolNames } from "../src/tools/index.js";
+import { TOOL_ERROR, RSI_TOOL, createTools, executeTool } from "../src/tools/index.js";
+import { KLINE_INTERVALS } from "../src/tools/params.js";
 import { RSI_ONLY_BTC_ETH } from "../src/tools/rsi.js";
 import { findRsiPython, pythonCandidates } from "../src/tools/pythonBin.js";
 
@@ -64,12 +65,12 @@ describe("инструмент RSI", () => {
   describe("реестр", () => {
     it("без настроек Python в реестр не попадает", () => {
       const tools = createTools({ binance: {} });
-      assert.ok(!toolNames(tools).includes(RSI_TOOL), "инструмент, который всегда отказывает, хуже отсутствующего");
+      assert.ok(!Object.keys(tools).includes(RSI_TOOL), "инструмент, который всегда отказывает, хуже отсутствующего");
     });
 
     it("с настройками появляется и объявляет ограничение в описании", () => {
       const { tools } = build();
-      assert.ok(toolNames(tools).includes(RSI_TOOL));
+      assert.ok(Object.keys(tools).includes(RSI_TOOL));
       // Планировщик читает описание — ограничение должно быть видно ему, а не
       // только тому, кто дойдёт до исходников.
       assert.match(tools[RSI_TOOL].description, /BTC и ETH/);
@@ -190,6 +191,18 @@ describe("инструмент RSI", () => {
       assert.equal(outcome.error.message, "Мало свечей.");
     });
 
+    // Вывод приходит кусками, и граница куска ложится где придётся — в том
+    // числе посередине двухбайтной кириллической буквы. Пока каждый кусок
+    // превращался в строку сам по себе, разрезанный символ приезжал двумя
+    // «ромбиками», и объяснение отказа доходило до пользователя битым.
+    it("склеивает кириллицу, разрезанную границей куска вывода", async () => {
+      const outcome = await build({ mode: "split" }).run({ symbol: "BTCUSDT" });
+
+      assert.equal(outcome.error.code, TOOL_ERROR.computationFailed);
+      assert.equal(outcome.error.message, "Мало свечей: нужно больше цен закрытия.");
+      assert.doesNotMatch(outcome.error.message, /\uFFFD/, "битых символов быть не должно");
+    });
+
     it("список монет в скрипте главнее: его отказ по монете остаётся отказом по монете", async () => {
       // Расходиться списки не должны, но если разойдутся — причина не должна
       // превратиться в «не удалось выполнить расчёт».
@@ -256,6 +269,37 @@ describe("инструмент RSI", () => {
 
       assert.equal(outcome.error.code, TOOL_ERROR.computationFailed);
       assert.match(outcome.error.message, /цен закрытия/);
+    });
+
+    // Список интервалов продублирован в скрипте намеренно — он самостоятельная
+    // утилита. Но разойтись списки не должны: интервал, который проходит нашу
+    // проверку и отвергается скриптом, стоит похода за свечами и запуска
+    // подпроцесса, а до пользователя доходит как «не удалось выполнить расчёт»
+    // вместо внятного «такого интервала нет».
+    it("список интервалов скрипта совпадает с нашим", () => {
+      const source = readFileSync(REAL_SCRIPT, "utf8");
+      const block = /^INTERVALS = \(([\s\S]*?)\)$/m.exec(source);
+      assert.ok(block, "в скрипте не нашёлся список INTERVALS");
+
+      const fromScript = [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+      assert.deepEqual(fromScript, KLINE_INTERVALS);
+    });
+
+    it("интервал, принятый инструментом, принимает и настоящий скрипт", async (t) => {
+      if (!available) return t.skip(skipReason);
+
+      for (const interval of KLINE_INTERVALS) {
+        const ctx = build({
+          mode: null,
+          pythonBin: python,
+          scriptPath: REAL_SCRIPT,
+          rows: WILDER.map(candle),
+        });
+        const outcome = await ctx.run({ symbol: "BTCUSDT", interval, length: 14 });
+
+        assert.equal(outcome.ok, true, `${interval}: ${outcome.error?.message}`);
+        assert.equal(outcome.value.interval, interval);
+      }
     });
   });
   describe("подбор интерпретатора", () => {

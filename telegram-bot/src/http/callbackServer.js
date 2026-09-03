@@ -1,9 +1,32 @@
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { logError } from "../logger.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 /** Сколько jobId помним, чтобы отсеивать повторные доставки. */
 const SEEN_JOBS_LIMIT = 1000;
+
+/**
+ * Сравнение общего секрета за постоянное время.
+ *
+ * Обычное `!==` останавливается на первом несовпавшем байте, и время ответа
+ * тем самым зависит от того, сколько знаков угадано. По одному запросу этого
+ * не измерить, но секрет здесь длинный и живёт долго, а подобрать его так
+ * можно за линейное число попыток вместо перебора.
+ *
+ * Длина при этом не тайна: `timingSafeEqual` требует одинаковых буферов и на
+ * разной длине бросает, поэтому её сверяем заранее и обычным сравнением.
+ *
+ * @param {unknown} provided что прислали в заголовке
+ * @param {string} expected что настроено у нас
+ */
+function secretMatches(provided, expected) {
+  if (typeof provided !== "string") return false;
+
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 /**
  * Приёмник готовых ответов от Core.
@@ -29,7 +52,7 @@ export function createCallbackServer({ path, onReply, authToken }) {
 
     // «Ответ модели» может прислать кто угодно, кто дотянулся до порта, —
     // без секрета бот отправил бы это пользователю от своего имени.
-    if (authToken && req.headers["x-core-token"] !== authToken) {
+    if (authToken && !secretMatches(req.headers["x-core-token"], authToken)) {
       sendJson(res, 401, { error: "unauthorized" });
       return;
     }

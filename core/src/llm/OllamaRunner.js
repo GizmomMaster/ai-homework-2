@@ -1,5 +1,5 @@
 import { LLM_ERROR, LlmError, THINK_OMIT } from "./LlmRunner.js";
-import { badResponseMessage } from "./badResponse.js";
+import { badResponseMessage, readJson } from "./badResponse.js";
 import { stripThinking } from "./stripThinking.js";
 
 /**
@@ -113,7 +113,7 @@ export class OllamaRunner {
       );
     }
 
-    const data = await response.json();
+    const data = await readJson(response, "Ollama");
     if (!data.message || typeof data.message.content !== "string") {
       throw new LlmError(
         LLM_ERROR.badResponse,

@@ -14,13 +14,22 @@ const storage = new AsyncLocalStorage();
  * Оборачивает обработку одного задания: внутри fn текущий job_id, счётчик
  * turn_number и набор уже отправленных модели строк живут в одном месте.
  *
- * @param {{ jobId: string, conversationId: number }} job
+ * @param {{ jobId: string, conversationId: number, db?: import("better-sqlite3").Database }} job
+ *   `db` — куда писать телеметрию этого задания. Нужна потому, что recorder
+ *   работает без инициализации на месте вызова (как logger.js), а приложений
+ *   в одном процессе может оказаться несколько: без явной базы записи ушли бы
+ *   в ту, чей `initTelemetry` был последним.
  * @param {() => Promise<T>} fn
  * @returns {Promise<T>}
  * @template T
  */
-export function runInJob({ jobId, conversationId }, fn) {
-  return storage.run({ jobId, conversationId, turn: 0, seen: new Set() }, fn);
+export function runInJob({ jobId, conversationId, db }, fn) {
+  return storage.run({ jobId, conversationId, db, turn: 0, seen: new Set() }, fn);
+}
+
+/** База текущего задания, если оно есть. @returns {object|undefined} */
+export function currentDb() {
+  return storage.getStore()?.db;
 }
 
 /** Следующий номер события (LLM- или tool-вызов) в текущем задании. */

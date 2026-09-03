@@ -36,6 +36,25 @@ if (mode === "hang") {
     JSON.stringify({ ok: false, code: "unsupported_symbol", message: "Только BTC и ETH." }) + "\n",
   );
   process.exit(1);
+} else if (mode === "split") {
+  // Отказ с кириллицей, разрезанный ровно посередине многобайтного символа:
+  // так ложится граница куска, когда вывод длиннее буфера канала. Инструмент
+  // обязан склеить его обратно без «ромбиков».
+  const body = Buffer.from(
+    JSON.stringify({
+      ok: false,
+      code: "not_enough_data",
+      message: "Мало свечей: нужно больше цен закрытия.",
+    }) + "\n",
+    "utf8",
+  );
+  // Первый продолжающий байт — разрез перед ним рвёт символ пополам.
+  const cut = body.findIndex((byte) => (byte & 0xc0) === 0x80);
+  process.stdout.write(body.subarray(0, cut));
+  setTimeout(() => {
+    process.stdout.write(body.subarray(cut));
+    process.exit(1);
+  }, 20);
 } else if (mode === "broken") {
   process.stdout.write(JSON.stringify({ ok: false, code: "not_enough_data", message: "Мало свечей." }) + "\n");
   process.exit(1);

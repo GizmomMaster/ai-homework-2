@@ -54,8 +54,12 @@ const CANDLES = 500;
 /** Время жизни результата: как у прочих котировок, минута. */
 const TTL_MS = 60_000;
 
-/** Ответ скрипта заведомо короткий; предел — на случай, если что-то пошло не так. */
-const MAX_OUTPUT_BYTES = 64 * 1024;
+/**
+ * Ответ скрипта заведомо короткий; предел — на случай, если что-то пошло не
+ * так. Знаки, а не байты: потоки читаются с заданной кодировкой (см.
+ * `execute`), и на входе у накопителя строка.
+ */
+const MAX_OUTPUT_CHARS = 64 * 1024;
 
 /**
  * @param {{
@@ -236,11 +240,18 @@ function execute({ spawnImpl, pythonBin, args, input, timeoutMs }) {
       );
     });
 
+    // Кодировка задаётся потоку, а не выводится при склейке: без неё каждый
+    // кусок превращался в строку сам по себе, и многобайтный символ,
+    // разрезанный границей куска, приезжал битым. Сообщения об отказе у
+    // скрипта русские — портились именно они.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+
     child.stdout.on("data", (chunk) => {
-      if (stdout.length < MAX_OUTPUT_BYTES) stdout += chunk;
+      if (stdout.length < MAX_OUTPUT_CHARS) stdout += chunk;
     });
     child.stderr.on("data", (chunk) => {
-      if (stderr.length < MAX_OUTPUT_BYTES) stderr += chunk;
+      if (stderr.length < MAX_OUTPUT_CHARS) stderr += chunk;
     });
 
     // Скрипт вправе отказаться до того, как дочитает stdin (например, увидев

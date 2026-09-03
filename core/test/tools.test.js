@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { BinanceClient } from "../src/tools/BinanceClient.js";
 import { TtlCache } from "../src/tools/cache.js";
-import { TOOL_ERROR, createTools, executeTool, toolNames } from "../src/tools/index.js";
+import { TOOL_ERROR, createTools, executeTool } from "../src/tools/index.js";
 
 /** Одна суточная сводка Binance — поля те, что реально приходят. */
 const ticker = {
@@ -54,7 +54,7 @@ describe("крипто-инструменты", () => {
   describe("реестр", () => {
     it("содержит пять инструментов спецификации", () => {
       const { tools } = build({});
-      assert.equal(toolNames(tools).length, 5);
+      assert.equal(Object.keys(tools).length, 5);
     });
 
     it("у каждого есть назначение и параметры — из них строится промпт планировщика", () => {
@@ -111,6 +111,20 @@ describe("крипто-инструменты", () => {
 
       await executeTool(tools, "get_crypto_current_price", { symbol: "BTCUSDT" });
       await executeTool(tools, "get_crypto_24h_ticker_stats", { symbol: "BTCUSDT" });
+
+      assert.equal(requests.length, 1, "биржу опросили один раз");
+    });
+
+    // Именно так их и выполняет PlanExecutor: шаги независимы и идут
+    // параллельно. Пока кеш заполнялся только после ответа биржи, оба шага
+    // успевали промахнуться мимо него и сходить на биржу порознь.
+    it("делит кеш и при одновременном вызове, а не только последовательном", async () => {
+      const { tools, requests } = build({ "/api/v3/ticker/24hr": ticker });
+
+      await Promise.all([
+        executeTool(tools, "get_crypto_current_price", { symbol: "BTCUSDT" }),
+        executeTool(tools, "get_crypto_24h_ticker_stats", { symbol: "BTCUSDT" }),
+      ]);
 
       assert.equal(requests.length, 1, "биржу опросили один раз");
     });
@@ -323,7 +337,7 @@ describe("крипто-инструменты", () => {
     it("никакой отказ не выбрасывается наружу", async () => {
       const { tools } = build({}, { status: 500 });
 
-      for (const name of toolNames(tools)) {
+      for (const name of Object.keys(tools)) {
         const result = await executeTool(tools, name, { symbol: "BTCUSDT", interval: "1h" });
         assert.equal(result.ok, false, name);
         assert.equal(typeof result.error.code, "string", name);

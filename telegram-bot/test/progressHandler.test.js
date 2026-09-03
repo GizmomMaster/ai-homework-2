@@ -105,4 +105,73 @@ describe("progressTracker", () => {
 
     await assert.doesNotReject(() => tracker.handle(payload("j_1", { stage: "routing" })));
   });
+
+  // Core шлёт стадии отдельными запросами и ответа не ждёт, а callback-сервер
+  // обрабатывает каждый независимо: во времени они пересекаются, и порядок
+  // прихода не гарантирован.
+  describe("одновременные и запоздавшие события", () => {
+    it("два одновременных первых статуса заводят одно сообщение, а не два", async () => {
+      const telegramClient = createFakeTelegramClient({ sendDelayMs: 10 });
+      const tracker = createProgressTracker({ telegramClient });
+
+      await Promise.all([
+        tracker.handle(payload("j_1", { stage: "routing", seq: 1 })),
+        tracker.handle(payload("j_1", { stage: "planning", seq: 2 })),
+      ]);
+
+      // Второе сообщение осталось бы в чате навсегда: убрать finish умеет
+      // только одно.
+      assert.equal(telegramClient.sent.length, 1);
+      assert.equal(telegramClient.edited.length, 1);
+    });
+
+    it("после finish в чате не остаётся статусного сообщения", async () => {
+      const telegramClient = createFakeTelegramClient({ sendDelayMs: 10 });
+      const tracker = createProgressTracker({ telegramClient });
+
+      // Событие уже в работе, когда приходит окончательный ответ.
+      const inFlight = tracker.handle(payload("j_1", { stage: "routing", seq: 1 }));
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      await tracker.finish("j_1");
+      await inFlight;
+
+      assert.equal(telegramClient.sent.length, 1);
+      assert.deepEqual(telegramClient.deleted, [{ chatId: "8123", messageId: 1 }]);
+    });
+
+    it("запоздавшая стадия не затирает уже показанную", async () => {
+      const telegramClient = createFakeTelegramClient();
+      const tracker = createProgressTracker({ telegramClient });
+
+      await tracker.handle(payload("j_1", { stage: "summarizing", seq: 4 }));
+      await tracker.handle(payload("j_1", { stage: "routing", seq: 1 }));
+
+      assert.match(telegramClient.sent[0].text, /свожу отчёт/i);
+      assert.equal(telegramClient.edited.length, 0, "устаревшее событие применять нечего");
+    });
+
+    it("повторная доставка одного и того же события ничего не меняет", async () => {
+      const telegramClient = createFakeTelegramClient();
+      const tracker = createProgressTracker({ telegramClient });
+
+      await tracker.handle(payload("j_1", { stage: "routing", seq: 1 }));
+      await tracker.handle(payload("j_1", { stage: "routing", seq: 1 }));
+
+      assert.equal(telegramClient.sent.length, 1);
+      assert.equal(telegramClient.edited.length, 0);
+    });
+
+    // Номер появился вместе с этой правкой: Core постарее его не шлёт, и
+    // адаптер не должен из-за этого замолчать.
+    it("без номера события работает по порядку прихода, как раньше", async () => {
+      const telegramClient = createFakeTelegramClient();
+      const tracker = createProgressTracker({ telegramClient });
+
+      await tracker.handle(payload("j_1", { stage: "routing" }));
+      await tracker.handle(payload("j_1", { stage: "summarizing" }));
+
+      assert.equal(telegramClient.sent.length, 1);
+      assert.match(telegramClient.edited[0].text, /свожу отчёт/i);
+    });
+  });
 });

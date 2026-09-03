@@ -103,10 +103,22 @@ function footnotes(coins, excluded) {
   // выглядит как ошибка, пока не сказано, что это не она.
   notes.push("_Δ% — за календарные сутки UTC, Δ24ч — за скользящие сутки от текущего момента._");
 
-  const fallback = coins.filter((coin) => coin.source === "coingecko").map((coin) => coin.symbol);
-  if (fallback.length > 0) {
+  // Две причины отката на CoinGecko, и путать их нельзя: «пары нет в
+  // листинге» — свойство монеты, которое не изменится к следующему запросу,
+  // а «биржа не ответила» — сегодняшняя заминка. Пока сноска была одна, она
+  // приписывала монете отсутствие пары каждый раз, когда до Binance просто не
+  // достучались.
+  const notListed = symbolsWhere(coins, "coingecko", "not_listed");
+  if (notListed.length > 0) {
     notes.push(
-      `_Нет пары к USDT на Binance, сутки посчитаны по данным CoinGecko: ${tickers(fallback)}._`,
+      `_Нет пары к USDT на Binance, сутки посчитаны по данным CoinGecko: ${tickers(notListed)}._`,
+    );
+  }
+
+  const binanceFailed = symbolsWhere(coins, "coingecko", "unavailable");
+  if (binanceFailed.length > 0) {
+    notes.push(
+      `_Binance не ответила, сутки посчитаны по данным CoinGecko: ${tickers(binanceFailed)}._`,
     );
   }
 
@@ -116,6 +128,13 @@ function footnotes(coins, excluded) {
   }
 
   return notes;
+}
+
+/** Тикеры монет, у которых совпали источник итогов суток и причина отката. */
+function symbolsWhere(coins, source, binanceMiss) {
+  return coins
+    .filter((coin) => coin.source === source && coin.binanceMiss === binanceMiss)
+    .map((coin) => coin.symbol);
 }
 
 /**

@@ -2,6 +2,7 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { BinanceClient } from "../src/tools/BinanceClient.js";
+import { CoinGeckoClient } from "../src/tools/CoinGeckoClient.js";
 import { TtlCache } from "../src/tools/cache.js";
 import { TOOL_ERROR } from "../src/tools/errors.js";
 
@@ -143,6 +144,87 @@ describe("BinanceClient", () => {
   });
 });
 
+// Механика запроса у обоих клиентов общая (PublicApiClient), своего —
+// разбор кодов ответа и род названия в сообщениях. Проверяем и то, и другое:
+// «CoinGecko ответила» читалось бы как опечатка, а лимит частоты у него
+// штатный исход, а не поломка.
+describe("CoinGeckoClient", () => {
+  let source;
+  afterEach(async () => {
+    await source?.close();
+    source = undefined;
+  });
+
+  async function connect(handler = () => ({}), options = {}) {
+    source = await startFakeExchange(handler);
+    return new CoinGeckoClient({ baseUrl: source.baseUrl, ...options });
+  }
+
+  it("складывает путь и параметры, как и клиент биржи", async () => {
+    const client = await connect(() => ({ body: [] }));
+
+    await client.get("/api/v3/coins/markets", { vs_currency: "usd", per_page: 30 });
+
+    assert.equal(source.requests[0], "/api/v3/coins/markets?vs_currency=usd&per_page=30");
+  });
+
+  it("пропускает неопределённые параметры", async () => {
+    const client = await connect(() => ({ body: [] }));
+
+    await client.get("/api/v3/coins/markets", { vs_currency: "usd", days: undefined });
+
+    assert.equal(source.requests[0], "/api/v3/coins/markets?vs_currency=usd");
+  });
+
+  it("429 — rate_limited: на бесплатном тарифе это штатный исход", async () => {
+    const client = await connect(() => ({ status: 429, body: {} }));
+
+    await assert.rejects(() => client.get("/api/v3/ping"), (error) => {
+      assert.equal(error.code, TOOL_ERROR.rateLimited);
+      return true;
+    });
+  });
+
+  it("прочая ошибка — upstream_error, и в мужском роде", async () => {
+    const client = await connect(() => ({ status: 503, body: {} }));
+
+    await assert.rejects(() => client.get("/api/v3/ping"), (error) => {
+      assert.equal(error.code, TOOL_ERROR.upstreamError);
+      assert.match(error.message, /CoinGecko ответил 503/);
+      return true;
+    });
+  });
+
+  it("тело не JSON — upstream_error", async () => {
+    const client = await connect(() => ({ raw: "<html>шлюз</html>" }));
+
+    await assert.rejects(() => client.get("/api/v3/ping"), (error) => {
+      assert.equal(error.code, TOOL_ERROR.upstreamError);
+      assert.match(error.message, /CoinGecko вернул не JSON/);
+      return true;
+    });
+  });
+
+  it("превышение таймаута — timeout", async () => {
+    const client = await connect(() => ({ delayMs: 300 }), { timeoutMs: 50 });
+
+    await assert.rejects(() => client.get("/api/v3/ping"), (error) => {
+      assert.equal(error.code, TOOL_ERROR.timeout);
+      assert.match(error.message, /CoinGecko не ответил за 50 мс/);
+      return true;
+    });
+  });
+
+  it("недоступный адрес — unavailable", async () => {
+    const client = new CoinGeckoClient({ baseUrl: "http://127.0.0.1:1" });
+
+    await assert.rejects(() => client.get("/api/v3/ping"), (error) => {
+      assert.equal(error.code, TOOL_ERROR.unavailable);
+      return true;
+    });
+  });
+});
+
 describe("TtlCache", () => {
   /** Управляемые часы: полагаться на реальное время в тестах незачем. */
   function clock(start = 1000) {
@@ -158,6 +240,70 @@ describe("TtlCache", () => {
     assert.equal(await cache.through("k", 1000, produce), 1);
     assert.equal(await cache.through("k", 1000, produce), 1);
     assert.equal(calls, 1);
+  });
+
+  // Шаги плана выполняются одновременно (CONCURRENCY в PlanExecutor), и два
+  // шага по одной паре начинаются раньше, чем первый успевает дойти до
+  // источника. Ради этого случая кеш и заведён — квота биржи считается на
+  // адрес, а не на задание.
+  it("одновременные запросы за одним ключом опрашивают источник один раз", async () => {
+    const cache = new TtlCache(clock());
+    let calls = 0;
+    const produce = async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return "значение";
+    };
+
+    const results = await Promise.all([
+      cache.through("k", 1000, produce),
+      cache.through("k", 1000, produce),
+      cache.through("k", 1000, produce),
+    ]);
+
+    assert.equal(calls, 1, "источник опрошен один раз");
+    assert.deepEqual(results, ["значение", "значение", "значение"]);
+  });
+
+  it("одновременный отказ не запоминается: следующий запрос пробует снова", async () => {
+    const cache = new TtlCache(clock());
+    let calls = 0;
+    const produce = async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (calls === 1) throw new Error("биржа оборвала соединение");
+      return "получилось";
+    };
+
+    const outcomes = await Promise.allSettled([
+      cache.through("k", 1000, produce),
+      cache.through("k", 1000, produce),
+    ]);
+
+    // Ждали одного и того же похода — оба получили одну и ту же неудачу.
+    assert.deepEqual(outcomes.map((o) => o.status), ["rejected", "rejected"]);
+    assert.equal(calls, 1);
+
+    assert.equal(await cache.through("k", 1000, produce), "получилось");
+    assert.equal(calls, 2, "отказ не закрепился на время жизни записи");
+  });
+
+  it("одновременный undefined не запоминается — договор тот же, что у отказа", async () => {
+    const cache = new TtlCache(clock());
+    let calls = 0;
+    const produce = async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return calls === 1 ? undefined : "получилось";
+    };
+
+    assert.deepEqual(
+      await Promise.all([cache.through("k", 1000, produce), cache.through("k", 1000, produce)]),
+      [undefined, undefined],
+    );
+    assert.equal(cache.size, 0, "пустой ответ не осел в кеше");
+
+    assert.equal(await cache.through("k", 1000, produce), "получилось");
   });
 
   it("после истечения срока источник опрашивается снова", async () => {

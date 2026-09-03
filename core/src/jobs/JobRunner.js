@@ -1,5 +1,7 @@
 import { log, logError } from "../logger.js";
 import { runInJob } from "../telemetry/context.js";
+import { JOB_STATUS } from "../db/jobRepository.js";
+import { FAILURE_REASON } from "../domain/DialogService.js";
 
 /**
  * Обрабатывает задания и доставляет результаты адаптерам.
@@ -124,22 +126,44 @@ export class JobRunner {
     // Без conversation (не должно случаться) или progressNotifier статус
     // просто не отправляется — это не ошибка обработки задания.
     const conversation = this.chatRepository.findConversationById(job.conversationId);
+    // Номер события в задании. Стадии уходят адаптеру отдельными запросами
+    // без ожидания ответа (ProgressNotifier) и порядок доставки не
+    // гарантируют: запоздавшее «разбираю запрос» иначе затрёт уже показанное
+    // «свожу отчёт». Считаем здесь — DialogService про доставку не знает, а
+    // JobRunner ею и владеет.
+    let progressSeq = 0;
     const onProgress =
       conversation && this.progressNotifier
-        ? (progress) => this.progressNotifier.notify(job, conversation, progress)
+        ? (progress) => {
+            progressSeq += 1;
+            this.progressNotifier.notify(job, conversation, { ...progress, seq: progressSeq });
+          }
         : undefined;
 
     // DialogService и агенты глубоко внутри него не знают job.id — телеметрия
     // (InstrumentedLlmRunner, PlanExecutor) читает его из этого контекста, а
     // не принимает через конструктор, чтобы не тянуть job_id через сигнатуры
     // доменных классов, которые про задания ничего не знают (см. core/src/telemetry/context.js).
-    const outcome = await runInJob({ jobId: job.id, conversationId: job.conversationId }, () =>
-      this.dialogService.process({
-        conversationId: job.conversationId,
-        text: job.requestText,
-        onProgress,
-      }),
-    );
+    let outcome;
+    try {
+      outcome = await runInJob({ jobId: job.id, conversationId: job.conversationId, db: this.db }, () =>
+        this.dialogService.process({
+          conversationId: job.conversationId,
+          text: job.requestText,
+          onProgress,
+        }),
+      );
+    } catch (error) {
+      // Сюда попадает только баг у нас: отказы модели и инструментов
+      // DialogService разбирает сам. Но оставить задание в `running` нельзя —
+      // очередь его больше не увидит, доставки не будет, и пользователь
+      // останется без ответа до перезапуска Core, глядя на застывшее
+      // статусное сообщение. Заканчиваем задание отказом: адаптеру есть что
+      // показать, а подробности с трассировкой уходят в лог здесь же —
+      // ниже их печатать нечем, там errorMessage без стека.
+      logError(`[job ${job.id}] Непредвиденный сбой обработки:`, error);
+      outcome = { status: JOB_STATUS.failed, reason: FAILURE_REASON.internal };
+    }
 
     const took = Date.now() - startedAt;
     // Время кладём в usage до записи: оттуда оно попадёт и в БД, и в callback

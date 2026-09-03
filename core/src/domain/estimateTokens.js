@@ -29,12 +29,22 @@ const CHARS_PER_TOKEN = 3;
 const MESSAGE_OVERHEAD_TOKENS = 4;
 
 /**
+ * Оценка по одной длине — для текста, которого уже нет.
+ *
+ * Нужна `stripThinking`: от вырезанного блока размышления остаётся только его
+ * длина, а сам текст не хранится. Считать по ней и незачем его восстанавливать.
+ *
+ * @param {number} chars длина текста в знаках
+ * @returns {number}
+ */
+export function estimateTokensForLength(chars) {
+  return Math.ceil(chars / CHARS_PER_TOKEN) + MESSAGE_OVERHEAD_TOKENS;
+}
+
+/**
  * @param {...string} texts реплики обмена
  * @returns {number} во сколько токенов они примерно обойдутся в промпте
  */
 export function estimateExchangeTokens(...texts) {
-  return texts.reduce(
-    (sum, text) => sum + Math.ceil((text?.length ?? 0) / CHARS_PER_TOKEN) + MESSAGE_OVERHEAD_TOKENS,
-    0,
-  );
+  return texts.reduce((sum, text) => sum + estimateTokensForLength(text?.length ?? 0), 0);
 }

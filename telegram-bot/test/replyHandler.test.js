@@ -171,13 +171,13 @@ describe("handleReply", () => {
       assert.match(ctx.telegramClient.lastText(), /не успела ответить/i);
     });
 
-    it("для недоступности показывает общее сообщение об ошибке", async (t) => {
+    it("для недоступности говорит про модель, а не про запрос", async (t) => {
       muteConsole(t);
       const ctx = deliver({ status: "failed", reason: "llm_unavailable" });
 
       await ctx.run();
 
-      assert.match(ctx.telegramClient.lastText(), /ошибка при обращении к модели/i);
+      assert.match(ctx.telegramClient.lastText(), /модель сейчас недоступна/i);
     });
 
     it("для незнакомой причины не падает, а сообщает об ошибке", async (t) => {
@@ -187,6 +187,69 @@ describe("handleReply", () => {
       await ctx.run();
 
       assert.match(ctx.telegramClient.lastText(), /ошибк/i);
+    });
+
+    // Код причины — это ключ объекта с текстами. У обычного объекта поиск
+    // "constructor" вернул бы функцию, и вместо текста пользователь увидел
+    // бы «[object Function]» — а прислать такую причину может кто угодно,
+    // кто дотянулся до callback-порта.
+    it("причина с именем свойства прототипа не выдаёт себя за текст", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "failed", reason: "constructor" });
+
+      await ctx.run();
+
+      assert.match(ctx.telegramClient.lastText(), /внутренняя ошибка/i);
+    });
+  });
+
+  // Когда ни один шаг плана не удался, Core отдаёт код отказа инструмента, а
+  // не модели. Раньше все они сливались в «ошибку при обращении к модели» —
+  // сообщение неверное (модель отработала исправно) и не подсказывающее, что
+  // делать дальше.
+  describe("ошибки сбора данных", () => {
+    it("для незнакомой пары просит проверить тикер", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "failed", reason: "unknown_symbol" });
+
+      await ctx.run();
+
+      const text = ctx.telegramClient.lastText();
+      assert.match(text, /тикер/i);
+      assert.doesNotMatch(text, /модел/i, "модель тут ни при чём");
+    });
+
+    it("для лимита биржи предлагает подождать", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "failed", reason: "rate_limited" });
+
+      await ctx.run();
+
+      const text = ctx.telegramClient.lastText();
+      assert.match(text, /биржа/i);
+      assert.doesNotMatch(text, /модел/i);
+    });
+
+    it("отличает недоступность биржи от её ошибки и от таймаута", async (t) => {
+      muteConsole(t);
+      const texts = [];
+      for (const reason of ["unavailable", "upstream_error", "timeout"]) {
+        const ctx = deliver({ status: "failed", reason });
+        await ctx.run();
+        texts.push(ctx.telegramClient.lastText());
+      }
+
+      assert.equal(new Set(texts).size, 3, "каждая причина объясняется по-своему");
+      for (const text of texts) assert.match(text, /биржа|бирже|биржей/i);
+    });
+
+    it("для негодных параметров просит уточнить запрос", async (t) => {
+      muteConsole(t);
+      const ctx = deliver({ status: "failed", reason: "invalid_params" });
+
+      await ctx.run();
+
+      assert.match(ctx.telegramClient.lastText(), /уточните/i);
     });
   });
 

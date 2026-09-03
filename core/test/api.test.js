@@ -234,6 +234,31 @@ describe("HTTP-контракт Core", () => {
       assert.equal(response.status, 401);
     });
 
+    // Сравнение идёт за постоянное время, и путь через него — только у токена
+    // той же длины: на разной длине проверка отваливается раньше. Оба случая
+    // должны одинаково давать 401.
+    it("отклоняет токен той же длины, совпавший началом", async () => {
+      core = await startCore({ authToken: "s3cret" });
+
+      const response = await core.request("POST", messagesPath, {
+        body: validMessage,
+        token: "s3creT",
+      });
+
+      assert.equal(response.status, 401);
+    });
+
+    it("отклоняет токен той же длины без единого совпадения", async () => {
+      core = await startCore({ authToken: "s3cret" });
+
+      const response = await core.request("POST", messagesPath, {
+        body: validMessage,
+        token: "XXXXXX",
+      });
+
+      assert.equal(response.status, 401);
+    });
+
     it("оставляет /health открытым для healthcheck контейнера", async () => {
       core = await startCore({ authToken: "s3cret" });
 

@@ -1,4 +1,4 @@
-import { currentJobId, markSeen, nextTurn } from "./context.js";
+import { currentDb, currentJobId, markSeen, nextTurn } from "./context.js";
 import { estimateExchangeTokens } from "../domain/estimateTokens.js";
 import { estimateCostUsd } from "./pricing.js";
 
@@ -7,17 +7,37 @@ import { estimateCostUsd } from "./pricing.js";
  * молча не делает ничего. Это то, что позволяет 20+ существующим тестам и
  * скриптам замера (router-eval.mjs, task-eval.mjs) не знать о телеметрии
  * вовсе — они просто никогда не вызывают initTelemetry.
+ *
+ * Но синглтон здесь — только точка входа, не место хранения. Запросы
+ * подготовлены **на каждую базу отдельно**, а нужная берётся из контекста
+ * задания (см. `runInJob` в context.js): приложений в одном процессе может
+ * оказаться несколько — так поднимаются тесты, — и пока связка была одна на
+ * модуль, записи всех уходили в ту базу, чей `initTelemetry` был последним.
+ * Ломалось это молча: строки писались, просто не туда.
  */
-let stmts = null;
-let pricing = { inputPerMillion: 0, outputPerMillion: 0 };
+const perDb = new WeakMap();
+
+/**
+ * База для вызовов вне задания: обзор рынка для `/start` идёт мимо очереди, а
+ * скрипты замера заданий не заводят вовсе. Их записям больше не из чего
+ * выбирать, и последний `initTelemetry` для них по-прежнему главный.
+ */
+let defaultDb = null;
+
+/** Связка «подготовленные запросы + цены» для базы текущего вызова. */
+function binding() {
+  const db = currentDb() ?? defaultDb;
+  return db ? perDb.get(db) : undefined;
+}
 
 /**
  * @param {import("better-sqlite3").Database} db
  * @param {{ pricing?: { inputPerMillion: number, outputPerMillion: number } }} [options]
  */
-export function initTelemetry(db, { pricing: priceConfig } = {}) {
-  if (priceConfig) pricing = priceConfig;
-  stmts = {
+export function initTelemetry(db, { pricing = { inputPerMillion: 0, outputPerMillion: 0 } } = {}) {
+  defaultDb = db;
+  perDb.set(db, {
+    pricing,
     insertLlmCall: db.prepare(
       `INSERT INTO llm_calls (
          job_id, agent_id, stage, turn_number, provider, model,
@@ -40,12 +60,12 @@ export function initTelemetry(db, { pricing: priceConfig } = {}) {
          @outputTokensEstimate, @durationMs, @ok, @errorCode, @now
        )`,
     ),
-  };
+  });
 }
 
 /** Для скриптов, которым важно знать, пишет ли что-то recordLlmCall. */
 export function isTelemetryEnabled() {
-  return stmts !== null;
+  return binding() !== undefined;
 }
 
 /**
@@ -74,14 +94,15 @@ export function recordLlmCall({
   ok,
   errorCode,
 }) {
-  if (!stmts) return;
+  const target = binding();
+  if (!target) return;
 
   const repeatedTexts = [];
   for (const message of messages) {
     if (markSeen(`${message.role}:${message.content}`)) repeatedTexts.push(message.content);
   }
 
-  stmts.insertLlmCall.run({
+  target.insertLlmCall.run({
     jobId: currentJobId() ?? null,
     agentId,
     stage,
@@ -93,7 +114,7 @@ export function recordLlmCall({
     reasoningTokens,
     repeatedPromptTokensEstimate: estimateExchangeTokens(...repeatedTexts),
     latencyMs,
-    estimatedCostUsd: estimateCostUsd({ promptTokens, completionTokens, pricing }),
+    estimatedCostUsd: estimateCostUsd({ promptTokens, completionTokens, pricing: target.pricing }),
     ok: ok ? 1 : 0,
     errorCode: errorCode ?? null,
     now: Date.now(),
@@ -118,9 +139,10 @@ export function recordToolCall({
   ok,
   errorCode,
 }) {
-  if (!stmts) return;
+  const target = binding();
+  if (!target) return;
 
-  stmts.insertToolCall.run({
+  target.insertToolCall.run({
     jobId: currentJobId() ?? null,
     toolName,
     turnNumber: nextTurn(),

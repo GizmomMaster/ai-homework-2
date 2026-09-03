@@ -1,5 +1,5 @@
 import { createRoutes } from "../src/http/routes.js";
-import { createStubHandlers } from "../src/http/stubHandlers.js";
+import { createStubHandlers } from "./stubHandlers.js";
 import { createServer } from "../src/http/server.js";
 import { createApp } from "../src/app.js";
 import { createDatabase } from "../src/db/database.js";

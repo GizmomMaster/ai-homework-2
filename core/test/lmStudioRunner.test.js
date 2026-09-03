@@ -19,10 +19,12 @@ async function startFakeLmStudio(handler) {
     req.on("data", (chunk) => (body += chunk));
     req.on("end", async () => {
       requests.push({ url: req.url, payload: JSON.parse(body) });
-      const { status = 200, json = chatResponse, delayMs = 0 } = (await handler()) ?? {};
+      const { status = 200, json = chatResponse, raw, delayMs = 0 } = (await handler()) ?? {};
       if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
       res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(json));
+      // `raw` — тело как есть: так отвечает прокси или туннель, вклинившийся
+      // перед провайдером, и статус при этом остаётся 200.
+      res.end(raw ?? JSON.stringify(json));
     });
   });
 
@@ -205,6 +207,24 @@ describe("LmStudioRunner", () => {
       await assert.rejects(() => runner.chat(messages), (error) => {
         assert.equal(error.code, LLM_ERROR.unavailable);
         assert.match(error.message, /404/);
+        return true;
+      });
+    });
+
+    // Тело, которое вообще не JSON, — это ответ прокси или туннеля перед
+    // провайдером, и приходит он со статусом 200. Пока его читал голый
+    // response.json(), наружу летел SyntaxError: DialogService такой код не
+    // опознаёт и записывал задание как internal_error — «баг у нас» вместо
+    // «провайдер ответил не тем».
+    it("не-JSON при статусе 200 → код llm_bad_response, а не внутренняя ошибка", async () => {
+      const runner = await connect(() => ({ raw: "<html><body>502 Bad Gateway</body></html>" }));
+
+      await assert.rejects(() => runner.chat(messages), (error) => {
+        assert.equal(error.name, "LlmError");
+        assert.equal(error.code, LLM_ERROR.badResponse);
+        assert.match(error.message, /не JSON/);
+        // Тело прикладывается: догадка о причине без него бесполезна.
+        assert.match(error.message, /502 Bad Gateway/);
         return true;
       });
     });
