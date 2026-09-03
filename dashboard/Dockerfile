@@ -20,6 +20,11 @@ COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
 
+# Пользователь без прав root (заведён в самом образе node). Дашборд открывает
+# базу только на чтение и своих файлов не создаёт — прав ему нужно ровно
+# столько.
+USER node
+
 EXPOSE 8090
 
 CMD ["node", "src/index.js"]
