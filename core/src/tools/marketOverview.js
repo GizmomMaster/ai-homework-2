@@ -150,6 +150,20 @@ const NOT_LISTED = Object.freeze({ notListed: true });
 const NO_HISTORY = { open: null, close: null, changePercent: null, dayVolume: null, source: null };
 
 /**
+ * Почему по монете пришлось уйти с биржи на откат. Различие видно только в
+ * {@link collectHistory} — до сводки оно не доезжало, и сноска утверждала
+ * «нет пары к USDT на Binance» даже там, где пара есть, а биржа просто не
+ * ответила. Значение в кеш не попадает: причина относится к этой попытке, а
+ * не к итогам суток, которые кеш и хранит.
+ */
+export const BINANCE_MISS = {
+  /** Пары нет в листинге — факт устойчивый. */
+  notListed: "not_listed",
+  /** Пара есть, но свечу взять не удалось: сеть, лимит, свеча не за те сутки. */
+  unavailable: "unavailable",
+};
+
+/**
  * Сколько держать итоги прошедших суток.
  *
  * Сутки закрыты, и их свеча больше не изменится — до самой полуночи, когда
@@ -202,10 +216,17 @@ async function collectHistory({ selected, binance, coingecko, cache, dayStart })
       history[index] = candle;
       continue;
     }
-    history[index] =
-      (await cachedDay(cache, `day:g:${coin.id}:${dayStart}`, () =>
-        coingeckoDay({ id: coin.id, coingecko, dayStart }),
-      )) ?? NO_HISTORY;
+
+    // Причину отката знаем только здесь: дальше по конвейеру от неё остаётся
+    // один `source: "coingecko"`, а сноска в сводке у этих двух случаев
+    // разная. Приписываем её снаружи кеша — сама-то запись про итоги суток,
+    // а не про то, как мы к ним пришли.
+    const binanceMiss = candle === NOT_LISTED ? BINANCE_MISS.notListed : BINANCE_MISS.unavailable;
+    const fallback = await cachedDay(cache, `day:g:${coin.id}:${dayStart}`, () =>
+      coingeckoDay({ id: coin.id, coingecko, dayStart }),
+    );
+
+    history[index] = { ...(fallback ?? NO_HISTORY), binanceMiss };
   }
 
   return history;

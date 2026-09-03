@@ -1,4 +1,4 @@
-import { findCommand } from "../handlers/commands.js";
+import { CORE_UNAVAILABLE_TEXT, findCommand } from "../handlers/commands.js";
 import { log, logError } from "../logger.js";
 import { sendSafely } from "./send.js";
 
@@ -80,9 +80,6 @@ function elapsed(since) {
 const NON_TEXT_WARNING =
   "Я умею обрабатывать только текстовые сообщения. Файлы, изображения, " +
   "голосовые и другие вложения не поддерживаются.";
-
-const CORE_UNAVAILABLE_TEXT =
-  "Сервис временно недоступен, попробуйте ещё раз через минуту.";
 
 /**
  * Бесконечный цикл long polling: получает обновления от Telegram и передаёт

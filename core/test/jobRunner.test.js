@@ -19,7 +19,13 @@ import {
  * здесь важно пережить «перезапуск»: репозитории и БД остаются те же, а
  * раннер создаётся заново — как после падения процесса.
  */
-function buildEnv({ theoryAgent, transport, jobRepositoryOverrides, progressNotifier } = {}) {
+function buildEnv({
+  theoryAgent,
+  transport,
+  jobRepositoryOverrides,
+  progressNotifier,
+  dialogService,
+} = {}) {
   const { db, chatRepository, jobRepository } = createTestRepositories();
   const conversation = chatRepository.getOrCreateConversation("telegram", "8123");
   const callbackTransport = transport ?? createFakeCallbackTransport();
@@ -31,12 +37,14 @@ function buildEnv({ theoryAgent, transport, jobRepositoryOverrides, progressNoti
       db,
       chatRepository,
       jobRepository: runnerJobs,
-      dialogService: new DialogService({
-        chatRepository,
-        routerAgent: createFakeRouter(),
-        theoryAgent: theoryAgent ?? createFakeTheoryAgent(),
-        contextWindowTokens: 1000,
-      }),
+      dialogService:
+        dialogService ??
+        new DialogService({
+          chatRepository,
+          routerAgent: createFakeRouter(),
+          theoryAgent: theoryAgent ?? createFakeTheoryAgent(),
+          contextWindowTokens: 1000,
+        }),
       callbackDelivery: new CallbackDelivery({
         callbackUrls: { telegram: "http://adapter.test/callbacks/replies" },
         fetchImpl: callbackTransport.fetchImpl,
@@ -139,6 +147,40 @@ describe("JobRunner", () => {
       assert.equal(typeof env.progressCalls[0].jobId, "string");
     });
 
+    // Стадии уходят адаптеру отдельными запросами без ожидания ответа, и
+    // порядок доставки не гарантирован. Номер — то, по чему адаптер отличает
+    // запоздавшее событие от нового и не даёт «разбираю запрос» затереть уже
+    // показанное «свожу отчёт».
+    it("нумерует стадии по порядку в рамках задания", async (t) => {
+      muteConsole(t);
+      const env = buildEnv();
+      env.enqueue("привет");
+
+      runUntil(t, env);
+      await waitFor(() => env.delivered.length === 1, { label: "ответ доставлен" });
+
+      const seqs = env.progressCalls.map((call) => call.progress.seq);
+      assert.deepEqual(seqs, seqs.map((_, index) => index + 1));
+    });
+
+    it("нумерация у каждого задания своя", async (t) => {
+      muteConsole(t);
+      const env = buildEnv();
+      env.enqueue("первый", "tg:8123:1");
+      env.enqueue("второй", "tg:8123:2");
+
+      runUntil(t, env);
+      await waitFor(() => env.delivered.length === 2, { label: "оба ответа доставлены" });
+
+      const byJob = new Map();
+      for (const call of env.progressCalls) {
+        byJob.set(call.jobId, [...(byJob.get(call.jobId) ?? []), call.progress.seq]);
+      }
+
+      assert.equal(byJob.size, 2);
+      for (const seqs of byJob.values()) assert.equal(seqs[0], 1, "счёт начинается заново");
+    });
+
     it("без progressNotifier задание всё равно обрабатывается", async (t) => {
       muteConsole(t);
       // false — явно «раннер без уведомлений о прогрессе», в отличие от
@@ -150,6 +192,86 @@ describe("JobRunner", () => {
       await waitFor(() => env.delivered.length === 1, { label: "ответ доставлен" });
 
       assert.equal(env.jobRepository.findById(job.id).status, JOB_STATUS.completed);
+    });
+  });
+
+  // DialogService разбирает отказы модели и инструментов сам, поэтому всё,
+  // что долетает досюда, — баг у нас. Но задание при этом уже помечено
+  // `running`, а очередь берёт только `queued`: без обработки оно осталось бы
+  // в работе навсегда, и пользователь ждал бы ответа, которого не будет, до
+  // перезапуска Core.
+  describe("непредвиденный сбой обработки", () => {
+    const brokenDialog = { process: async () => { throw new Error("баг в домене"); } };
+
+    it("завершает задание отказом, а не оставляет в running", async (t) => {
+      muteConsole(t);
+      const env = buildEnv({ dialogService: brokenDialog });
+      const job = env.enqueue();
+
+      runUntil(t, env);
+      await waitFor(() => env.delivered.length === 1, { label: "отказ доставлен" });
+
+      assert.equal(env.jobRepository.findById(job.id).status, JOB_STATUS.failed);
+      assert.equal(env.jobRepository.findById(job.id).reason, "internal_error");
+    });
+
+    it("доставляет отказ адаптеру — пользователь не остаётся без ответа", async (t) => {
+      muteConsole(t);
+      const env = buildEnv({ dialogService: brokenDialog });
+      env.enqueue();
+
+      runUntil(t, env);
+      await waitFor(() => env.delivered.length === 1, { label: "отказ доставлен" });
+
+      assert.equal(env.delivered[0].payload.status, "failed");
+      assert.equal(env.delivered[0].payload.reason, "internal_error");
+    });
+
+    it("не роняет цикл: следующее задание обрабатывается как обычно", async (t) => {
+      muteConsole(t);
+      let broken = true;
+      const env = buildEnv({
+        dialogService: {
+          async process({ conversationId }) {
+            if (broken) {
+              broken = false;
+              throw new Error("баг в домене");
+            }
+            return {
+              status: JOB_STATUS.completed,
+              replyText: "ответ",
+              usage: { totalTokens: 1, contextLimit: 1000 },
+              historyEntry: {
+                sessionId: env.activeSession().id,
+                userText: "второй",
+                assistantText: "ответ",
+                totalTokens: 1,
+              },
+            };
+          },
+        },
+      });
+      env.enqueue("первый", "tg:8123:1");
+      env.enqueue("второй", "tg:8123:2");
+
+      runUntil(t, env);
+      await waitFor(() => env.delivered.length === 2, { label: "оба задания завершены" });
+
+      assert.deepEqual(
+        env.delivered.map((d) => d.payload.status),
+        ["failed", "completed"],
+      );
+    });
+
+    it("история при этом не пишется: обмена не состоялось", async (t) => {
+      muteConsole(t);
+      const env = buildEnv({ dialogService: brokenDialog });
+      env.enqueue();
+
+      runUntil(t, env);
+      await waitFor(() => env.delivered.length === 1, { label: "отказ доставлен" });
+
+      assert.deepEqual(env.chatRepository.getMessages(env.activeSession().id), []);
     });
   });
 

@@ -28,6 +28,15 @@ export class TtlCache {
    * превратиться в постоянный пробел в отчёте. Значение, которое нужно
    * запомнить, включая пустое, передаётся как `null`.
    *
+   * **В записи лежит промис, а не готовое значение**, и это существенно.
+   * Между началом вычисления и его концом проходит поход по сети, а шаги
+   * плана выполняются одновременно (см. CONCURRENCY в PlanExecutor): пока
+   * запись появлялась только после await, два шага по одной паре успевали
+   * оба промахнуться мимо кеша и сходить на биржу порознь — то есть ровно в
+   * том случае, ради которого кеш и заводился. Срок жизни при этом идёт от
+   * начала вычисления, а не от его конца: запись живёт на время запроса
+   * короче, и это дешевле лишнего похода на биржу.
+   *
    * @template T
    * @param {string} key
    * @param {number} ttlMs время жизни; 0 отключает кеширование
@@ -40,8 +49,21 @@ export class TtlCache {
     const hit = this.#entries.get(key);
     if (hit && hit.expiresAt > this.now()) return hit.value;
 
-    const value = await produce();
-    if (value !== undefined) this.#set(key, value, ttlMs);
+    const pending = produce();
+    this.#set(key, pending, ttlMs);
+
+    let value;
+    try {
+      value = await pending;
+    } catch (error) {
+      // Отказ не запоминаем — по той же причине, по которой не запоминаем
+      // `undefined`. Ждавшие этот же промис получат ту же ошибку (один поход
+      // на биржу на всех), а следующий вызов начнёт заново.
+      this.#forget(key, pending);
+      throw error;
+    }
+
+    if (value === undefined) this.#forget(key, pending);
     return value;
   }
 
@@ -60,6 +82,15 @@ export class TtlCache {
     // только если этого не хватило, выбрасываем самую старую по вставке.
     if (this.#entries.size >= this.maxEntries) this.#evict();
     this.#entries.set(key, { value, expiresAt: this.now() + ttlMs });
+  }
+
+  /**
+   * Убирает свою запись — но только если она всё ещё своя: за время ожидания
+   * её мог вытеснить {@link #evict}, а на её месте оказаться чужая, более
+   * свежая. Стирать её значило бы наказать за чужую неудачу.
+   */
+  #forget(key, pending) {
+    if (this.#entries.get(key)?.value === pending) this.#entries.delete(key);
   }
 
   #evict() {

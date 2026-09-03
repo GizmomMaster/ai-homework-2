@@ -13,7 +13,7 @@ import {
 import { renderMarketOverview } from "../src/domain/renderMarketOverview.js";
 import { MarketOverviewService, unusableCommentary } from "../src/domain/MarketOverviewService.js";
 import { buildBrief } from "../src/agents/MarketOverviewAgent.js";
-import { createTools, executeTool, toolNames } from "../src/tools/index.js";
+import { createTools, executeTool } from "../src/tools/index.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -63,7 +63,7 @@ const OVERVIEW = {
       price: 0.085109, priceChangePercent24h: 1.37, volume24h: 3.38e8, marketCap: 1.32e10,
     },
     {
-      symbol: "FIGR_HELOC", name: "Figure Heloc", source: "coingecko",
+      symbol: "FIGR_HELOC", name: "Figure Heloc", source: "coingecko", binanceMiss: "not_listed",
       open: 1.0185, close: 1.0398, changePercent: 2.1, dayVolume: 1.72e8,
       price: 1.041, priceChangePercent24h: 0.48, volume24h: 5.95e7, marketCap: 2.27e10,
     },
@@ -301,6 +301,51 @@ describe("обзор рынка", () => {
       assert.equal(overview.coins[1].source, null, "строка осталась, но без цифр");
       assert.equal(overview.coins.length, 2);
     });
+
+    // Откат срабатывает и когда пары нет, и когда биржа не ответила. Причина
+    // видна только здесь: дальше от неё остаётся один `source`, а сноска в
+    // сводке у этих двух случаев разная.
+    it("помечает откат отсутствием пары, когда биржа так и сказала", async (t) => {
+      muteConsole(t);
+      const { binance, coingecko } = clients({
+        ranking: [coin("HYPE", { id: "hyperliquid" })],
+        charts: {
+          hyperliquid: {
+            prices: [[DAY_START, 84.67], [DAY_START + DAY_MS, 80.91]],
+            total_volumes: [[DAY_START + DAY_MS, 1e9]],
+          },
+        },
+      });
+
+      const overview = await buildMarketOverview({ binance, coingecko, limit: 1, now: NOW });
+
+      assert.equal(overview.coins[0].source, "coingecko");
+      assert.equal(overview.coins[0].binanceMiss, "not_listed");
+    });
+
+    it("помечает откат недоступностью, когда биржа просто не ответила", async (t) => {
+      muteConsole(t);
+      const { coingecko } = clients({
+        ranking: [coin("SOL", { id: "solana" })],
+        charts: {
+          solana: {
+            prices: [[DAY_START, 120], [DAY_START + DAY_MS, 130]],
+            total_volumes: [[DAY_START + DAY_MS, 1e9]],
+          },
+        },
+      });
+      // Пара на бирже есть, но взять свечу не вышло — это другой случай, и
+      // обещать пользователю отсутствие листинга здесь нельзя.
+      const binance = new BinanceClient({
+        baseUrl: "http://binance.test",
+        fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({}) }),
+      });
+
+      const overview = await buildMarketOverview({ binance, coingecko, limit: 1, now: NOW });
+
+      assert.equal(overview.coins[0].source, "coingecko");
+      assert.equal(overview.coins[0].binanceMiss, "unavailable");
+    });
   });
 
   describe("кеш итогов суток", () => {
@@ -382,12 +427,12 @@ describe("обзор рынка", () => {
   describe("реестр инструментов", () => {
     it("без источника капитализации инструмент обзора не появляется", () => {
       const { binance } = clients();
-      assert.equal(toolNames(createTools({ binance })).includes("get_crypto_market_overview"), false);
+      assert.equal(Object.keys(createTools({ binance })).includes("get_crypto_market_overview"), false);
     });
 
     it("с источником капитализации инструмент доступен планировщику", () => {
       const { binance, coingecko } = clients({ ranking: [] });
-      assert.ok(toolNames(createTools({ binance, coingecko })).includes("get_crypto_market_overview"));
+      assert.ok(Object.keys(createTools({ binance, coingecko })).includes("get_crypto_market_overview"));
     });
 
     it("отвергает limit сверх предела, не обращаясь к сети", async () => {
@@ -458,6 +503,36 @@ describe("обзор рынка", () => {
     it("отмечает строки, посчитанные не по бирже", () => {
       assert.match(text, /данным CoinGecko/);
       assert.match(text, /FIGR_HELOC/);
+    });
+
+    // Откат на CoinGecko случается по двум разным причинам, и сноска у них
+    // разная: отсутствие пары — свойство монеты, молчание биржи — сегодняшняя
+    // заминка. Обещать пользователю первое там, где случилось второе, нельзя.
+    it("не приписывает монете отсутствие пары, когда молчала биржа", () => {
+      const overview = {
+        ...OVERVIEW,
+        coins: [{ ...OVERVIEW.coins[2], symbol: "SOL", binanceMiss: "unavailable" }],
+      };
+
+      const notes = renderMarketOverview(overview);
+
+      assert.match(notes, /Binance не ответила, сутки посчитаны по данным CoinGecko/);
+      assert.doesNotMatch(notes, /Нет пары к USDT/);
+    });
+
+    it("разводит две причины отката по разным сноскам", () => {
+      const overview = {
+        ...OVERVIEW,
+        coins: [
+          { ...OVERVIEW.coins[2], symbol: "HYPE", binanceMiss: "not_listed" },
+          { ...OVERVIEW.coins[2], symbol: "SOL", binanceMiss: "unavailable" },
+        ],
+      };
+
+      const notes = renderMarketOverview(overview);
+
+      assert.match(notes, /Нет пары к USDT на Binance[^\n]*`HYPE`/);
+      assert.match(notes, /Binance не ответила[^\n]*`SOL`/);
     });
 
     it("тикер с подчёркиванием берёт в инлайн-код, чтобы не сломать курсив", () => {

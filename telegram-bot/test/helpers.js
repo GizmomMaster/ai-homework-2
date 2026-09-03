@@ -7,7 +7,7 @@ import http from "node:http";
  * сообщение, отработал без обращения к сети.
  * @param {{ failSendMessage?: boolean }} [options]
  */
-export function createFakeTelegramClient({ failSendMessage = false } = {}) {
+export function createFakeTelegramClient({ failSendMessage = false, sendDelayMs = 0 } = {}) {
   const sent = [];
   const edited = [];
   const deleted = [];
@@ -17,7 +17,12 @@ export function createFakeTelegramClient({ failSendMessage = false } = {}) {
     sent,
     edited,
     deleted,
+    // `sendDelayMs` растягивает отправку: обращения к Telegram идут по сети и
+    // пересекаются во времени, а без задержки два одновременных вызова в
+    // тесте разошлись бы по микрозадачам слишком аккуратно, чтобы поймать
+    // гонку.
     async sendMessage({ chatId, text, parseMode }) {
+      if (sendDelayMs) await new Promise((resolve) => setTimeout(resolve, sendDelayMs));
       if (failSendMessage) throw new Error("Telegram недоступен");
       const messageId = nextMessageId;
       nextMessageId += 1;

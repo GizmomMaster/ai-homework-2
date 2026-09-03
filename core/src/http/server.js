@@ -1,4 +1,5 @@
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { HttpError, unauthorized } from "./errors.js";
 import { logError } from "../logger.js";
 
@@ -6,6 +7,28 @@ const METHODS_WITH_BODY = new Set(["POST", "PUT", "PATCH"]);
 
 /** Заголовок с общим секретом между Core и адаптерами. */
 export const AUTH_HEADER = "x-core-token";
+
+/**
+ * Сравнение общего секрета за постоянное время.
+ *
+ * Обычное `!==` останавливается на первом несовпавшем байте, и время ответа
+ * тем самым зависит от того, сколько знаков угадано. По одному запросу этого
+ * не измерить, но секрет здесь длинный и живёт долго, а подобрать его так
+ * можно за линейное число попыток вместо перебора.
+ *
+ * Длина при этом не тайна: `timingSafeEqual` требует одинаковых буферов и на
+ * разной длине бросает, поэтому её сверяем заранее и обычным сравнением.
+ *
+ * @param {unknown} provided что прислали в заголовке
+ * @param {string} expected что настроено у нас
+ */
+export function secretMatches(provided, expected) {
+  if (typeof provided !== "string") return false;
+
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 /**
  * HTTP-сервер оркестратора на встроенном `node:http` — без внешних
@@ -26,7 +49,7 @@ export function createServer({ router, maxBodyBytes = 64 * 1024, authToken }) {
 
       // /health намеренно открыт: он нужен healthcheck'у контейнера,
       // а секретов не раскрывает.
-      if (authToken && pathname.startsWith("/v1/") && req.headers[AUTH_HEADER] !== authToken) {
+      if (authToken && pathname.startsWith("/v1/") && !secretMatches(req.headers[AUTH_HEADER], authToken)) {
         throw unauthorized("Неверный или отсутствующий заголовок X-Core-Token.");
       }
 
@@ -93,6 +116,12 @@ function readJsonBody(req, maxBytes) {
       size += chunk.length;
       if (size > maxBytes) {
         settled = true;
+        // Дальше не читаем: копить мы перестали и так, но без паузы остаток
+        // тела продолжал бы литься в сокет и вычитываться в никуда. Пауза
+        // включает встречное давление TCP — отправитель упрётся сам. Рвать
+        // соединение здесь нельзя: ответ 413 уходит по нему же, и клиент
+        // увидел бы обрыв вместо внятного кода.
+        req.pause();
         reject(new HttpError(413, "payload_too_large", `Тело запроса больше ${maxBytes} байт.`));
         return;
       }

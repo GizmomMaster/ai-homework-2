@@ -1,4 +1,4 @@
-import { estimateExchangeTokens } from "../domain/estimateTokens.js";
+import { estimateTokensForLength } from "../domain/estimateTokens.js";
 
 /**
  * Блок размышлений гибридных reasoning-моделей (Qwen3, DeepSeek-R1 и
@@ -33,8 +33,8 @@ export function stripThinking(content) {
 
   return {
     content: withoutThinking.trim(),
-    // estimateExchangeTokens считает по длине текста, а не по содержимому,
-    // поэтому вырезанный текст незачем хранить отдельно — хватает его длины.
-    reasoningTokens: removedChars > 0 ? estimateExchangeTokens("x".repeat(removedChars)) : 0,
+    // Оценка идёт по длине текста, а не по содержимому, поэтому вырезанный
+    // блок незачем хранить — хватает того, насколько он укоротил ответ.
+    reasoningTokens: removedChars > 0 ? estimateTokensForLength(removedChars) : 0,
   };
 }

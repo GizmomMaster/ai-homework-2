@@ -2,7 +2,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDatabase } from "../src/db/database.js";
 import { runInJob, nextTurn, markSeen } from "../src/telemetry/context.js";
-import { initTelemetry, recordToolCall } from "../src/telemetry/recorder.js";
+import { initTelemetry, recordLlmCall, recordToolCall } from "../src/telemetry/recorder.js";
 import { InstrumentedLlmRunner } from "../src/telemetry/InstrumentedLlmRunner.js";
 import { estimateCostUsd } from "../src/telemetry/pricing.js";
 
@@ -191,5 +191,62 @@ describe("telemetry/recorder + InstrumentedLlmRunner", () => {
     assert.equal(row.tool_name, "get_crypto_current_price");
     assert.equal(row.turn_number, 1);
     assert.equal(row.ok, 1);
+  });
+
+  // Приложений в одном процессе может оказаться несколько — так поднимаются
+  // тесты. Пока подготовленные запросы были одни на модуль, записи всех
+  // уходили в базу последнего initTelemetry, и ломалось это молча: строки
+  // писались, просто не туда.
+  describe("несколько приложений в одном процессе", () => {
+    it("пишет в базу своего задания, а не в ту, что инициализирована последней", async () => {
+      const first = createDatabase(":memory:");
+      const second = createDatabase(":memory:");
+      initTelemetry(first, { pricing: { inputPerMillion: 0, outputPerMillion: 0 } });
+      initTelemetry(second, { pricing: { inputPerMillion: 0, outputPerMillion: 0 } });
+
+      await runInJob({ jobId: "в-первую", conversationId: 1, db: first }, async () => {
+        recordToolCall({
+          toolName: "get_crypto_current_price",
+          inputSize: 1,
+          outputSize: 1,
+          outputTokensEstimate: 1,
+          durationMs: 1,
+          ok: true,
+        });
+      });
+
+      assert.equal(first.prepare("SELECT COUNT(*) AS n FROM tool_calls").get().n, 1);
+      assert.equal(second.prepare("SELECT COUNT(*) AS n FROM tool_calls").get().n, 0);
+
+      first.close();
+      second.close();
+    });
+
+    it("цена берётся у своей базы, а не у соседней", async () => {
+      const cheap = createDatabase(":memory:");
+      const pricey = createDatabase(":memory:");
+      initTelemetry(cheap, { pricing: { inputPerMillion: 1, outputPerMillion: 1 } });
+      initTelemetry(pricey, { pricing: { inputPerMillion: 1000, outputPerMillion: 1000 } });
+
+      await runInJob({ jobId: "дешёвое", conversationId: 1, db: cheap }, async () => {
+        recordLlmCall({
+          agentId: "router",
+          stage: "routing",
+          provider: "lmstudio",
+          model: "m",
+          messages: [{ role: "user", content: "привет" }],
+          promptTokens: 1_000_000,
+          completionTokens: 0,
+          latencyMs: 1,
+          ok: true,
+        });
+      });
+
+      const row = cheap.prepare("SELECT estimated_cost_usd AS cost FROM llm_calls").get();
+      assert.equal(row.cost, 1, "цена соседней базы дала бы 1000");
+
+      cheap.close();
+      pricey.close();
+    });
   });
 });

@@ -1,3 +1,5 @@
+import { LLM_ERROR, LlmError } from "./LlmRunner.js";
+
 /**
  * Сообщения об ответах модели, которые не удалось прочитать.
  *
@@ -14,6 +16,46 @@
 
 /** Сколько знаков тела ответа оставлять в сообщении. */
 const BODY_EXCERPT_LIMIT = 500;
+
+/**
+ * Тело ответа как JSON — с отказом, который переживёт границу сервисов.
+ *
+ * Голый `response.json()` бросает `SyntaxError`, а это не {@link LlmError}:
+ * `DialogService` не опознает его код и отдаст `internal_error` — «баг у нас»
+ * вместо «провайдер ответил не тем». А ответить не тем при статусе 200 он
+ * вполне может: прокси или туннель перед LM Studio отдаёт свою HTML-страницу,
+ * и по коду ответа этого не видно. `BinanceClient` разбирает этот случай
+ * давно — раннеры отставали.
+ *
+ * @param {Response} response
+ * @param {string} vendor имя провайдера для сообщения
+ * @returns {Promise<unknown>}
+ * @throws {LlmError}
+ */
+export async function readJson(response, vendor) {
+  let raw;
+  try {
+    raw = await response.text();
+  } catch (error) {
+    throw new LlmError(
+      LLM_ERROR.unavailable,
+      `Соединение с ${vendor} оборвалось на чтении ответа: ${error.message}`,
+    );
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new LlmError(
+      LLM_ERROR.badResponse,
+      badResponseMessage({
+        vendor,
+        hint: `${vendor} вернула не JSON при статусе ${response.status}.`,
+        data: raw,
+      }),
+    );
+  }
+}
 
 /**
  * @param {{

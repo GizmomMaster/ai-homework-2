@@ -22,40 +22,81 @@ export function createProgressTracker({ telegramClient }) {
   const messages = new Map();
   /** @type {Set<string>} задания, для которых уже пришёл окончательный ответ. */
   const finishedJobs = new Set();
+  /** @type {Map<string, number>} наибольший применённый номер события задания. */
+  const appliedSeq = new Map();
+  /** @type {Map<string, Promise<void>>} цепочка обработки событий задания. */
+  const queues = new Map();
+
+  /** Одно событие. Вызывается строго по одному на задание — см. `handle`. */
+  async function apply(payload) {
+    // Финальный ответ мог обогнать запоздавший статус по сети — тогда
+    // заводить для него новое сообщение, которое уже некому будет убрать,
+    // не нужно.
+    if (finishedJobs.has(payload.jobId)) return;
+
+    // Стадии уходят из Core отдельными запросами без ожидания ответа, и
+    // порядок их доставки не гарантирован: без этой проверки запоздавшее
+    // «разбираю запрос» затёрло бы уже показанное «свожу отчёт». Номер
+    // проставляет JobRunner; старый Core его не шлёт — тогда полагаемся на
+    // порядок прихода, как и раньше.
+    const seq = payload.progress?.seq;
+    if (typeof seq === "number") {
+      if (seq <= (appliedSeq.get(payload.jobId) ?? 0)) return;
+      appliedSeq.set(payload.jobId, seq);
+    }
+
+    const text = progressText(payload.progress);
+    if (!text) return;
+
+    const chatId = payload.externalId;
+    const existing = messages.get(payload.jobId);
+
+    try {
+      if (existing) {
+        await telegramClient.editMessageText({ chatId, messageId: existing.messageId, text });
+      } else {
+        const sent = await telegramClient.sendMessage({ chatId, text });
+        if (sent?.message_id) {
+          messages.set(payload.jobId, { chatId, messageId: sent.message_id });
+        }
+      }
+    } catch (error) {
+      // Статус — удобство, а не гарантия: не получилось обновить — не
+      // страшно, окончательный ответ всё равно придёт отдельным сообщением.
+      logError(`[job ${payload.jobId}] Не удалось обновить статус обработки:`, error);
+    }
+  }
 
   return {
     /** Обрабатывает payload со статусом "progress", пришедший от Core. */
-    async handle(payload) {
-      // Финальный ответ мог обогнать запоздавший статус по сети — тогда
-      // заводить для него новое сообщение, которое уже некому будет убрать,
-      // не нужно.
-      if (finishedJobs.has(payload.jobId)) return;
-
-      const text = progressText(payload.progress);
-      if (!text) return;
-
-      const chatId = payload.externalId;
-      const existing = messages.get(payload.jobId);
-
-      try {
-        if (existing) {
-          await telegramClient.editMessageText({ chatId, messageId: existing.messageId, text });
-        } else {
-          const sent = await telegramClient.sendMessage({ chatId, text });
-          if (sent?.message_id) {
-            messages.set(payload.jobId, { chatId, messageId: sent.message_id });
-          }
-        }
-      } catch (error) {
-        // Статус — удобство, а не гарантия: не получилось обновить — не
-        // страшно, окончательный ответ всё равно придёт отдельным сообщением.
-        logError(`[job ${payload.jobId}] Не удалось обновить статус обработки:`, error);
-      }
+    handle(payload) {
+      // События одного задания выстраиваются в цепочку. Приходят они
+      // независимыми HTTP-запросами и во времени пересекаются, а первое из
+      // них заводит сообщение, которое остальные редактируют: два
+      // одновременных «первых» события завели бы два сообщения, и одно
+      // осталось бы в чате навсегда — убрать `finish` умеет только одно.
+      const previous = queues.get(payload.jobId) ?? Promise.resolve();
+      const current = previous.then(() => apply(payload));
+      queues.set(payload.jobId, current);
+      // Цепочка живёт, пока по заданию есть что обрабатывать. Обычно её
+      // убирает `finish`, но окончательный ответ может и не прийти (Core
+      // упал) — тогда запись снимет за собой последнее же событие.
+      current.then(() => {
+        if (queues.get(payload.jobId) === current) queues.delete(payload.jobId);
+      });
+      return current;
     },
 
     /** Убирает статусное сообщение задания — вызывается перед отправкой финального ответа. */
     async finish(jobId) {
       remember(finishedJobs, jobId);
+
+      // Дожидаемся уже начатых событий: то из них, что прошло проверку
+      // finishedJobs до этой отметки, иначе успело бы завести сообщение
+      // после того, как мы его удалили, — и оно осталось бы в чате.
+      await queues.get(jobId);
+      queues.delete(jobId);
+      appliedSeq.delete(jobId);
 
       const existing = messages.get(jobId);
       if (!existing) return;

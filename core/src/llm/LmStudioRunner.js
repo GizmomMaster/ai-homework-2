@@ -1,5 +1,5 @@
 import { LLM_ERROR, LlmError } from "./LlmRunner.js";
-import { badResponseMessage } from "./badResponse.js";
+import { badResponseMessage, readJson } from "./badResponse.js";
 import { stripThinking } from "./stripThinking.js";
 
 /** @typedef {import("./LlmRunner.js").LlmRunner} LlmRunner */
@@ -85,7 +85,7 @@ export class LmStudioRunner {
       );
     }
 
-    const data = await response.json();
+    const data = await readJson(response, "LM Studio");
     const message = data.choices?.[0]?.message;
     if (!message || typeof message.content !== "string") {
       throw new LlmError(

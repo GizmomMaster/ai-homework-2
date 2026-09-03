@@ -348,11 +348,6 @@ export async function executeTool(tools, name, params = {}) {
   }
 }
 
-/** Имена инструментов для перечисления в схеме плана (фаза 4). */
-export function toolNames(tools) {
-  return Object.keys(tools);
-}
-
 function failure(code, message) {
   return { ok: false, error: { code, message } };
 }

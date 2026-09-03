@@ -213,6 +213,17 @@ describe("callbackServer", () => {
       const response = await server.post(completedPayload, { token: "wrong-token" });
 
       assert.equal(response.status, 401);
+    });
+
+    // Сравнение секрета идёт за постоянное время; на токен другой длины оно
+    // отваливается раньше, так что путь через побайтную сверку проверяем
+    // отдельно — и «ответ модели» от чужого он пропускать не должен.
+    it("отклоняет токен той же длины", async () => {
+      server = await startServer(undefined, { authToken: "s3cret" });
+
+      const response = await server.post(completedPayload, { token: "s3creT" });
+
+      assert.equal(response.status, 401);
       assert.equal(server.received.length, 0);
     });
 
