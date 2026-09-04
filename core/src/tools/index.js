@@ -79,7 +79,7 @@ export function createTools({ binance, coingecko, rsi, cache = new TtlCache() })
   const tools = {
     get_crypto_current_price: {
       description:
-        "Текущая спотовая цена пары, лучшие цены покупки и продажи (спред) и изменение за 24 часа.",
+        "Текущая цена пары, лучшие bid и ask со спредом, изменение за 24 часа.",
       parameters: {
         symbol: { type: "string", description: "Торговая пара, например BTCUSDT" },
       },
@@ -106,8 +106,7 @@ export function createTools({ binance, coingecko, rsi, cache = new TtlCache() })
 
     get_crypto_historical_klines: {
       description:
-        "Исторические свечи (OHLCV) и объёмы за период. Годится для динамики цены, " +
-        "волатильности и сравнения активности по времени.",
+        "Свечи OHLCV с объёмами за период: динамика цены, волатильность, активность по времени.",
       parameters: {
         symbol: { type: "string", description: "Торговая пара, например ETHUSDT" },
         interval: {
@@ -117,7 +116,7 @@ export function createTools({ binance, coingecko, rsi, cache = new TtlCache() })
         },
         limit: {
           type: "integer",
-          description: `Сколько свечей вернуть, до ${MAX_KLINES} (по умолчанию 100)`,
+          description: `Сколько свечей, до ${MAX_KLINES} (по умолчанию 100)`,
         },
         startTime: { type: "integer", description: "Начало периода, метка времени в мс" },
       },
@@ -164,8 +163,8 @@ export function createTools({ binance, coingecko, rsi, cache = new TtlCache() })
 
     get_crypto_24h_ticker_stats: {
       description:
-        "Агрегированная статистика за 24 часа: объём в базовом и котируемом активе, " +
-        "средневзвешенная цена, число сделок, максимум и минимум.",
+        "Статистика за 24 часа: объём в базовом и котируемом активе, средневзвешенная " +
+        "цена, число сделок, максимум и минимум.",
       parameters: {
         symbol: { type: "string", description: "Торговая пара, например SOLUSDT" },
       },
@@ -190,13 +189,13 @@ export function createTools({ binance, coingecko, rsi, cache = new TtlCache() })
 
     get_crypto_orderbook_depth: {
       description:
-        "Срез книги ордеров: заявки на покупку и продажу. Показывает крупные стенки " +
-        "ликвидности и перевес спроса или предложения.",
+        "Срез книги ордеров: заявки на покупку и продажу, крупные стенки ликвидности, " +
+        "перевес спроса или предложения.",
       parameters: {
         symbol: { type: "string", description: "Торговая пара, например BTCUSDT" },
         limit: {
           type: "integer",
-          description: "Глубина среза: 5, 10, 20, 50, 100, 500, 1000 или 5000 (по умолчанию 100)",
+          description: "Глубина: 5, 10, 20, 50, 100, 500, 1000 или 5000 (по умолчанию 100)",
         },
       },
       required: ["symbol"],
@@ -237,13 +236,12 @@ export function createTools({ binance, coingecko, rsi, cache = new TtlCache() })
       // описание и назначение говорят про объём торгов. Планировщик выбирает
       // инструмент по имени, и на расхождении промахивался бы.
       description:
-        "Скрининг рынка: пары к USDT, отсортированные по суточному объёму торгов. " +
-        "Показывает, где сейчас основная активность.",
+        "Пары к USDT, отсортированные по суточному объёму торгов: где сейчас основная активность.",
       parameters: {
-        limit: { type: "integer", description: "Сколько пар вернуть, до 50 (по умолчанию 10)" },
+        limit: { type: "integer", description: "Сколько пар, до 50 (по умолчанию 10)" },
         minVolumeUsd: {
           type: "number",
-          description: "Отбросить пары с суточным объёмом меньше указанного (в USDT)",
+          description: "Порог суточного объёма в USDT, пары ниже отбрасываются",
         },
       },
       required: [],
@@ -290,14 +288,13 @@ export function createTools({ binance, coingecko, rsi, cache = new TtlCache() })
   if (coingecko) {
     tools[MARKET_OVERVIEW_TOOL] = {
       description:
-        "Обзор рынка: топ монет по рыночной капитализации (стейблкоины и обёртки вроде " +
-        "WBTC и stETH исключены) с итогами прошедших суток UTC — цена открытия и " +
-        "закрытия, изменение в процентах, объём торгов — и текущим состоянием. " +
-        "Единственный инструмент, который знает капитализацию: у биржи её нет.",
+        "Топ монет по капитализации (без стейблкоинов и обёрток вроде WBTC и stETH) с " +
+        "итогами прошедших суток UTC — открытие, закрытие, изменение, объём — и текущей " +
+        "ценой. Единственный источник капитализации: у биржи её нет.",
       parameters: {
         limit: {
           type: "integer",
-          description: `Сколько монет вернуть, до ${MAX_OVERVIEW_COINS} (по умолчанию 10)`,
+          description: `Сколько монет, до ${MAX_OVERVIEW_COINS} (по умолчанию 10)`,
         },
       },
       required: [],

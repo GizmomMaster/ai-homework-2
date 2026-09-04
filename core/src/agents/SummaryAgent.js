@@ -114,9 +114,15 @@ export function dedupeStepValues(steps) {
 export function buildBrief({ question, taskSummary, steps }) {
   const deduped = dedupeStepValues(steps);
 
+  // JSON без отступов. Отступы модель не читает — их роль в том, чтобы JSON
+  // разбирал глазами человек, — а платим за них мы: перевод строки и пробел
+  // на каждое поле дают 13% длины на плоском объекте вроде котировки и 23%
+  // на вложенном (выборка свечей, строки скринера), и это самая большая
+  // часть промпта сводящего агента: у него константа всего ~390 токенов
+  // против ~690 на данные шагов.
   const collected = deduped
     .filter((step) => step.ok)
-    .map((step) => `${step.action}:\n${JSON.stringify(compactForPrompt(step.value), null, 1)}`)
+    .map((step) => `${step.action}:\n${JSON.stringify(compactForPrompt(step.value))}`)
     .join("\n\n");
 
   // Вместе с причиной: отказ инструмента бывает содержательным ответом, а не

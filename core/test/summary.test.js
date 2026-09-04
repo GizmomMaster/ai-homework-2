@@ -145,6 +145,20 @@ describe("задание для сводящего агента", () => {
     assert.doesNotMatch(brief, /НЕ УДАЛОСЬ/);
   });
 
+  it("печатает данные без отступов: их читает модель, а платим за них мы", () => {
+    // Отступы нужны человеку, разбирающему JSON глазами. Модели они не
+    // говорят ничего, а стоят 13% длины на плоском объекте и 23% на
+    // вложенном — при том что данные шагов и есть основная часть этого
+    // промпта.
+    const brief = buildBrief({
+      question: "?",
+      taskSummary: "t",
+      steps: [{ action: "цена BTC", ok: true, value: { symbol: "BTCUSDT", price: 1, bid: 2 } }],
+    });
+
+    assert.match(brief, /\{"symbol":"BTCUSDT","price":1,"bid":2\}/);
+  });
+
   it("сжимает данные шага перед вставкой", () => {
     const brief = buildBrief({
       question: "?",

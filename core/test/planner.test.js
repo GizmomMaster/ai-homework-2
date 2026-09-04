@@ -11,6 +11,7 @@ import { PlanExecutor } from "../src/domain/PlanExecutor.js";
 import { renderReport } from "../src/domain/renderReport.js";
 import { BinanceClient } from "../src/tools/BinanceClient.js";
 import { createTools } from "../src/tools/index.js";
+import { KLINE_INTERVALS } from "../src/tools/params.js";
 import { LLM_ERROR } from "../src/llm/LlmRunner.js";
 import { createFakeLlmRunner, createTestRepositories } from "./helpers.js";
 import { initTelemetry } from "../src/telemetry/recorder.js";
@@ -72,6 +73,22 @@ describe("PlannerAgent", () => {
       assert.ok(!("executionEstimate" in schema.properties));
     });
 
+    it("перечисление интервалов переживает слияние параметров разных инструментов", () => {
+      // Параметры всех инструментов сливаются по имени, и побеждает
+      // зарегистрированный последним. `interval` у RSI шёл без enum и снимал
+      // грамматическое ограничение заодно и со свечей — молча, потому что
+      // проверка при исполнении всё равно ловила лишнее, но уже после того,
+      // как модель успевала его сгенерировать.
+      const withRsi = createTools({
+        binance: new BinanceClient({ baseUrl: "http://binance.test" }),
+        rsi: { pythonBin: "python3", scriptPath: "rsi.py" },
+      });
+
+      const { interval } = buildPlanSchema(withRsi).properties.plan.items.properties.parameters.properties;
+
+      assert.deepEqual(interval.enum, KLINE_INTERVALS);
+    });
+
     it("ставит потолок на число шагов", () => {
       assert.equal(schema.properties.plan.maxItems, MAX_PLAN_STEPS);
     });
@@ -86,6 +103,17 @@ describe("PlannerAgent", () => {
         assert.ok(prompt.includes(tool.description), name);
       }
       assert.ok(prompt.includes("symbol"));
+    });
+
+    it("помечает обязательные параметры звёздочкой, а не словом", () => {
+      // Каталог уходит в промпт на каждом вызове планировщика, а слова
+      // «(обязательный)» и «(необязательный)» стоили больше двухсот знаков на
+      // четырнадцати параметрах. Звёздочка объяснена в заголовке раздела —
+      // без объяснения она была бы шумом.
+      assert.match(prompt, /звёздочка у параметра — обязательный/);
+      assert.match(prompt, /\n {3}symbol\*: /);
+      assert.match(prompt, /\n {3}limit: /);
+      assert.doesNotMatch(prompt, /\(необязательный\)/);
     });
 
     it("говорит, что шаги независимы: исполнитель запускает их одновременно", () => {
