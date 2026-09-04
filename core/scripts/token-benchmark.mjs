@@ -407,7 +407,7 @@ function printSummary(s) {
   line("input токенов", s.llm.input);
   line("output токенов", s.llm.output);
   line("reasoning токенов", s.llm.reasoning);
-  line("repeated токенов", `${s.llm.repeated} (${Math.round(s.llm.repeatRate * 100)}% от input)`);
+  line("repeated токенов", `${s.llm.repeated} (${round(s.llm.repeatRate * 100, 1)}% от input)`);
   line("условная стоимость", `$${s.llm.cost.toFixed(4)}`);
   line("задержка, мс", `средняя ${s.llm.avgLatency}, максимум ${s.llm.maxLatency}`);
 
@@ -480,7 +480,10 @@ function printComparison(before, after) {
     ["output всего", before.llm.output, after.llm.output],
     ["reasoning", before.llm.reasoning, after.llm.reasoning],
     ["repeated", before.llm.repeated, after.llm.repeated],
-    ["repeated, % от input", Math.round(before.llm.repeatRate * 100), Math.round(after.llm.repeatRate * 100)],
+    // Доля — с десятыми: округление до целого превращало 1.4% → 1 и 1.6% → 2,
+    // и строка разницы объявляла «+100%» там, где сам repeated изменился на 2%,
+    // а доля выросла только потому, что сократился знаменатель.
+    ["repeated, % от input", round(before.llm.repeatRate * 100, 1), round(after.llm.repeatRate * 100, 1)],
     ["стоимость, $", round(before.llm.cost, 4), round(after.llm.cost, 4)],
     ["задержка модели, мс", before.llm.avgLatency, after.llm.avgLatency],
     ["неудачных вызовов", before.llm.failed, after.llm.failed],
