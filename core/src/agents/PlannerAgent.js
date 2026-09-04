@@ -78,15 +78,19 @@ export function buildPlanSchema(tools) {
  * @param {Array<{ name: string, description: string, body: string }>} [skills]
  */
 export function buildPlannerPrompt(tools, skills = []) {
+  // Разметка каталога выбрана по цене: он уходит в промпт на каждом вызове
+  // планировщика, а это самый дорогой из промптов системы. Слова
+  // «(обязательный)» и «(необязательный)» при четырнадцати параметрах стоили
+  // больше двухсот знаков — их заменяет звёздочка, объяснённая в заголовке
+  // раздела. Отдельная строка «Параметры:» и отступ в пять пробелов ушли по
+  // той же причине: назначение инструмента и его параметры и так разделены
+  // тире и переводом строки.
   const catalogue = Object.entries(tools)
     .map(([name, tool], index) => {
       const params = Object.entries(tool.parameters)
-        .map(([key, spec]) => {
-          const required = tool.required.includes(key) ? "обязательный" : "необязательный";
-          return `     - ${key} (${required}): ${spec.description}`;
-        })
+        .map(([key, spec]) => `   ${key}${tool.required.includes(key) ? "*" : ""}: ${spec.description}`)
         .join("\n");
-      return `${index + 1}. "${name}"\n   ${tool.description}\n   Параметры:\n${params || "     нет"}`;
+      return `${index + 1}. "${name}" — ${tool.description}\n${params || "   без параметров"}`;
     })
     .join("\n");
 
@@ -99,7 +103,7 @@ export function buildPlannerPrompt(tools, skills = []) {
 
   return `Ты — Агент-Планировщик в мультиагентной системе для криптотрейдеров. Тебе достаётся задача пользователя по анализу или сбору данных о криптовалютах. Твоя цель: оценить, выполнима ли она имеющимися инструментами, и построить пошаговый план.
 
-ДОСТУПНЫЕ ИНСТРУМЕНТЫ (других в системе НЕТ):
+ДОСТУПНЫЕ ИНСТРУМЕНТЫ (других в системе НЕТ; звёздочка у параметра — обязательный):
 ${catalogue}
 
 ПРАВИЛА:

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { TOOL_ERROR, ToolError } from "./errors.js";
-import { optionalCount, requireInterval, requireSymbol } from "./params.js";
+import { KLINE_INTERVALS, optionalCount, requireInterval, requireSymbol } from "./params.js";
 
 /**
  * Инструмент расчёта RSI поверх Python-скрипта `scripts/rsi/rsi.py`.
@@ -73,13 +73,25 @@ const MAX_OUTPUT_CHARS = 64 * 1024;
  */
 export function createRsiTool({ binance, cache, pythonBin, scriptPath, timeoutMs = 30_000, spawnImpl = spawn }) {
   return {
+    // Пороги зон (70/30) в описании не повторяются: планировать по ним нечего,
+    // а в отчёт они приходят из самого вывода инструмента (`overbought`,
+    // `oversold`, `zone`). Ограничение по монетам, наоборот, остаётся здесь —
+    // на нём планировщик отсекает лишний шаг, не потратив ни свечей, ни
+    // подпроцесса (см. CLAUDE.md о трёх местах этого ограничения).
     description:
-      "Индекс относительной силы (RSI) по свечам Binance: текущее значение, " +
-      "несколько предыдущих и зона (перекупленность выше 70, перепроданность ниже 30). " +
-      "Считается ТОЛЬКО для BTC и ETH; для других монет инструмент откажет.",
+      "Индекс относительной силы (RSI): текущее значение, несколько предыдущих и " +
+      "зона перекупленности/перепроданности. ТОЛЬКО для BTC и ETH, на других монетах откажет.",
     parameters: {
       symbol: { type: "string", description: "Только BTCUSDT или ETHUSDT" },
-      interval: { type: "string", description: `Размер свечи, например 1h или 1d (по умолчанию ${DEFAULT_INTERVAL})` },
+      // Перечисление то же, что у get_crypto_historical_klines, и это важно:
+      // схема плана сливает параметры всех инструментов по имени
+      // (`buildPlanSchema`), и `interval` без enum, зарегистрированный позже,
+      // снимал грамматическое ограничение и со свечей тоже.
+      interval: {
+        type: "string",
+        enum: KLINE_INTERVALS,
+        description: `Размер свечи (по умолчанию ${DEFAULT_INTERVAL})`,
+      },
       length: { type: "integer", description: `Период RSI в свечах (по умолчанию ${DEFAULT_LENGTH})` },
     },
     required: ["symbol"],

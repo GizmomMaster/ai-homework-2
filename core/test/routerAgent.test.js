@@ -161,6 +161,17 @@ describe("RouterAgent", () => {
       assert.doesNotMatch(ROUTER_PROMPT, /"outOfScopeReason"/);
     });
 
+    it("не пересказывает JSON Schema словами", () => {
+      // Перечень полей в фигурных скобках дублировал ROUTER_SCHEMA, которая и
+      // так ограничивает генерацию грамматикой, и стоил ~170 токенов на
+      // каждый запрос пользователя — маршрутизатор зовётся на всех ветках.
+      // Осталась одна строка с тем, чего схема выразить не умеет.
+      assert.doesNotMatch(ROUTER_PROMPT, /ФОРМАТ ВЫХОДА/);
+      assert.doesNotMatch(ROUTER_PROMPT, /"isCryptoRelated": true \| false/);
+      assert.match(ROUTER_PROMPT, /topicSummary — суть темы до 10 слов/);
+      assert.match(ROUTER_PROMPT, /clarificationQuestion — только при/);
+    });
+
     it("валидатор отвергает не-объекты", () => {
       for (const value of [null, "строка", 42, [verdict]]) {
         assert.equal(isRouterVerdict(value), false);
